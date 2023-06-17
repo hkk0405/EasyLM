@@ -35,6 +35,18 @@ from EasyLM.jax_utils import (
 
 
 LLAMA_STANDARD_CONFIGS = {
+    'tiny': {
+        'vocab_size': 32000,
+        'hidden_size': 64,
+        'intermediate_size': 128,
+        'num_hidden_layers': 2,
+        'num_attention_heads': 2,
+        'max_sequence_length': 2048,
+        'initializer_range': 0.02,
+        'rms_norm_eps': 1e-6,
+        'use_cache': True,
+        'tie_word_embeddings': False,
+    },
     '3b': {
         'vocab_size': 32000,
         'hidden_size': 3200,
@@ -482,7 +494,8 @@ class FlaxLLaMAAttention(nn.Module):
         batch_size = hidden_states.shape[0]
         causal_mask = jnp.broadcast_to(causal_mask, (batch_size,) + causal_mask.shape[1:])
 
-        attention_mask = jnp.broadcast_to(jnp.expand_dims(attention_mask, axis=(-3, -2)), causal_mask.shape)
+        # attention_mask = jnp.broadcast_to(jnp.expand_dims(attention_mask, axis=(-3, -2)), causal_mask.shape)
+        attention_mask = jnp.expand_dims(attention_mask, axis=(1))
         attention_mask = combine_masks(attention_mask, causal_mask, fcm_mask)
 
         dropout_rng = None

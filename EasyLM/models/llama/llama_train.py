@@ -1,3 +1,5 @@
+import os
+
 import pprint
 from functools import partial
 
@@ -24,19 +26,31 @@ from EasyLM.models.llama.llama_model import (
     LLaMAConfig, FlaxLLaMAForCausalLMModule
 )
 
+import transformers
+from transformers import AutoTokenizer
+import torch
+from datasets import load_from_disk
+from dataclasses import dataclass
+
 
 FLAGS, FLAGS_DEF = mlxu.define_flags_with_default(
+    batch_size=1,
+    seq_length=2048,
+    tokenizer_path="tokenizer",
+    data_path="data",
+    output_dir="output",
+    logger_online=False,
     seed=42,
     mesh_dim='1,-1,1',
-    dtype='fp32',
+    dtype='fp16',
     total_steps=10000,
     load_llama_config='',
     update_llama_config='',
     load_checkpoint='',
     load_dataset_state='',
-    log_freq=50,
-    save_model_freq=0,
-    save_milestone_freq=0,
+    log_freq=1000,
+    save_model_freq=1000,
+    save_milestone_freq=1000,
     eval_steps=0,
     tokenizer=LLaMAConfig.get_tokenizer_config(),
     train_dataset=DatasetFactory.get_default_config(),
@@ -50,10 +64,74 @@ FLAGS, FLAGS_DEF = mlxu.define_flags_with_default(
 )
 
 
+def make_inputs(
+    batch_data, tokenizer, max_length, im_start_token, im_end_token
+):
+    
+    input_ids = [
+        datum["input_ids"] + [tokenizer.pad_token_id] * (max_length - len(datum["input_ids"]))
+        for datum in batch_data
+    ]
+    input_ids = np.array(input_ids, dtype=np.int32)
+    positions = [datum["attention_mask"] for datum in batch_data]
+
+    batch_size = len(batch_data)
+    attention_mask = np.zeros((batch_size, max_length, max_length), dtype=np.uint8)
+    position_ids = np.zeros((batch_size, max_length), dtype=np.int32)
+    target_tokens = np.zeros((batch_size, max_length), dtype=np.int32)
+    target_tokens.fill(tokenizer.eos_token_id)
+    loss_mask = np.ones((batch_size, max_length), dtype=np.uint8)
+    
+    for i, position in enumerate(positions):
+        start = 0
+        for length in position:
+            end = start + length
+            mask = np.tril(np.ones((length, length), dtype=np.uint8))
+            attention_mask[i, start:end, start:end] = mask
+            position_ids[i, start:end] = np.arange(length)
+            target_tokens[i, start:end - 1] = input_ids[i, start + 1:end]
+            start = end
+        loss_mask[i, start:] = 0
+    
+    target_tokens[target_tokens == im_end_token] = tokenizer.eos_token_id
+    loss_mask[input_ids == im_start_token] = 0
+    loss_mask[input_ids == im_end_token] = 0
+        
+    batch = {
+        'input_tokens': input_ids,
+        'attention_mask': attention_mask,
+        'position_ids': position_ids,
+        'target_tokens': target_tokens,
+        'loss_masks': loss_mask,
+    }
+    return batch
+
+
+@dataclass
+class DataCollatorForSupervisedDataset(object):
+    """Collate examples for supervised fine-tuning."""
+
+    tokenizer: transformers.PreTrainedTokenizer
+    max_length: int
+    im_start_token: int
+    im_end_token: int
+
+    def __call__(self, instances):
+        features = make_inputs(
+            instances, 
+            self.tokenizer,
+            max_length=self.max_length,
+            im_start_token=self.im_start_token,
+            im_end_token=self.im_end_token,
+        )
+        return features
+
+
 def main(argv):
     JaxDistributedConfig.initialize(FLAGS.jax_distributed)
     variant = mlxu.get_user_flags(FLAGS, FLAGS_DEF)
     flags_config_dict = mlxu.user_flags_to_config_dict(FLAGS, FLAGS_DEF)
+    FLAGS.logger.online = FLAGS.logger_online
     logger = mlxu.WandBLogger(
         config=FLAGS.logger,
         variant=variant,
@@ -61,8 +139,48 @@ def main(argv):
     )
     set_random_seed(FLAGS.seed)
 
-    tokenizer = LLaMAConfig.get_tokenizer(FLAGS.tokenizer)
-    dataset = DatasetFactory.load_dataset(FLAGS.train_dataset, tokenizer)
+    # tokenizer = LLaMAConfig.get_tokenizer(FLAGS.tokenizer)
+    tokenizer = AutoTokenizer.from_pretrained(
+        FLAGS.tokenizer_path,
+    )
+    # dataset = CustomDataset(FLAGS, data_path, tokenizer)
+    
+    try:
+        im_start_token = tokenizer.convert_token_to_id("<|im_start|>")
+        im_end_token = tokenizer.convert_token_to_id("<|im_end|>")
+    except:
+        im_start_token, im_end_token = None, None    
+    print(im_start_token, im_end_token)
+    
+    data_collator = DataCollatorForSupervisedDataset(
+        tokenizer=tokenizer, 
+        max_length=FLAGS.seq_length,
+        im_start_token=im_start_token,
+        im_end_token=im_end_token,
+    )
+    preprocessing_num_workers = 2
+    train_loader = torch.utils.data.DataLoader(
+        load_from_disk(FLAGS.data_path),
+        batch_size=FLAGS.batch_size,
+        shuffle=False,  # NOTE Data is already shuffled when serialized
+        num_workers=preprocessing_num_workers,
+        drop_last=True,
+        collate_fn=data_collator,
+        persistent_workers=True if preprocessing_num_workers > 0 else False,
+    )
+    
+    if not os.path.exists(FLAGS.output_dir):
+        os.makedirs(FLAGS.output_dir)
+
+    # for batch in train_loader:
+    #     input_ids = batch["target_tokens"][0].tolist()
+    #     print(tokenizer.decode(input_ids))
+    #     print('-' * 20)
+    #     break
+    # exit(1)
+
+    # tokenizer = LLaMAConfig.get_tokenizer(FLAGS.tokenizer)
+    # dataset = DatasetFactory.load_dataset(FLAGS.train_dataset, tokenizer)
     if FLAGS.load_dataset_state != '':
         dataset.load_state_dict(mlxu.load_pickle(FLAGS.load_dataset_state))
 
@@ -72,7 +190,7 @@ def main(argv):
         )
         eval_iterator = iter(eval_dataset)
 
-    seq_length = dataset.seq_length
+    # seq_length = dataset.seq_length
 
     if FLAGS.load_llama_config != '':
         llama_config = LLaMAConfig.load_config(FLAGS.load_llama_config)
@@ -83,11 +201,13 @@ def main(argv):
         llama_config.update(dict(eval(FLAGS.update_llama_config)))
 
     llama_config.update(dict(
-        bos_token_id=dataset.tokenizer.bos_token_id,
-        eos_token_id=dataset.tokenizer.eos_token_id,
+        # bos_token_id=dataset.tokenizer.bos_token_id,
+        # eos_token_id=dataset.tokenizer.eos_token_id,
+        bos_token_id=tokenizer.bos_token_id,
+        eos_token_id=tokenizer.eos_token_id
     ))
-    if llama_config.vocab_size < dataset.vocab_size:
-        llama_config.update(dict(vocab_size=dataset.vocab_size))
+    if llama_config.vocab_size < tokenizer.vocab_size:
+        llama_config.update(dict(vocab_size=tokenizer.vocab_size))
 
     model = FlaxLLaMAForCausalLMModule(
         llama_config, dtype=get_float_dtype_by_name(FLAGS.dtype)
@@ -104,9 +224,9 @@ def main(argv):
     def init_fn(rng):
         rng_generator = JaxRNG(rng)
         params = model.init(
-            input_ids=jnp.zeros((4, seq_length), dtype=jnp.int32),
-            position_ids=jnp.zeros((4, seq_length), dtype=jnp.int32),
-            attention_mask=jnp.ones((4, seq_length), dtype=jnp.int32),
+            input_ids=jnp.zeros((FLAGS.batch_size, FLAGS.seq_length), dtype=jnp.int32),
+            position_ids=jnp.zeros((FLAGS.batch_size, FLAGS.seq_length), dtype=jnp.int32),
+            attention_mask=jnp.ones((FLAGS.batch_size, FLAGS.seq_length, FLAGS.seq_length), dtype=jnp.int32),
             rngs=rng_generator(llama_config.rng_keys()),
         )
         return TrainState.create(params=params, tx=optimizer, apply_fn=None)
@@ -117,6 +237,8 @@ def main(argv):
         def loss_and_accuracy(params):
             logits = model.apply(
                 params, batch['input_tokens'], deterministic=False,
+                attention_mask=batch['attention_mask'],
+                position_ids=batch['position_ids'],
                 rngs=rng_generator(llama_config.rng_keys()),
             ).logits
             return cross_entropy_loss_and_accuracy(
@@ -159,7 +281,7 @@ def main(argv):
         train_state_partition, train_state_shapes
     )
     checkpointer = StreamingCheckpointer(
-        FLAGS.checkpointer, logger.output_dir,
+        FLAGS.checkpointer, FLAGS.output_dir,
         enable=jax.process_index() == 0,
     )
 
@@ -202,7 +324,7 @@ def main(argv):
             train_state=train_state,
             gather_fns=gather_fns,
             metadata=metadata,
-            dataset=dataset.get_state_dict(),
+            dataset=None, # dataset=dataset.get_state_dict(),
             milestone=milestone,
         )
 
@@ -223,6 +345,7 @@ def main(argv):
             del restored_params
 
         start_step = int(jax.device_get(train_state.step))
+        print(f"Start at {start_step} steps...")
 
         if FLAGS.save_model_freq > 0:
             save_checkpoint(train_state)
@@ -231,7 +354,12 @@ def main(argv):
 
         step_counter = trange(start_step, FLAGS.total_steps, ncols=0)
 
-        for step, (batch, dataset_metrics) in zip(step_counter, dataset):
+        # for step, (batch, dataset_metrics) in zip(step_counter, dataset):
+        for step, batch in zip(step_counter, train_loader):
+            
+            if step < start_step:
+                continue
+            
             train_state, sharded_rng, metrics = sharded_train_step(
                 train_state, sharded_rng, batch
             )
@@ -249,7 +377,7 @@ def main(argv):
 
                 log_metrics = {"step": step}
                 log_metrics.update(metrics)
-                log_metrics.update(dataset_metrics)
+                # log_metrics.update(dataset_metrics)
                 log_metrics = jax.device_get(log_metrics)
                 logger.log(log_metrics)
                 tqdm.write("\n" + pprint.pformat(log_metrics) + "\n")

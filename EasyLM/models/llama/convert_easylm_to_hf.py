@@ -45,6 +45,13 @@ FLAGS, FLAGS_DEF = mlxu.define_flags_with_default(
 
 
 LLAMA_STANDARD_CONFIGS = {
+    'tiny': {
+        'dim': 64,
+        'intermediate_size': 128,
+        'n_layers': 2,
+        'n_heads': 2,
+        'norm_eps': 1e-6,
+    },
     '3b': {
         'dim': 3200,
         'intermediate_size': 8640,
@@ -276,10 +283,10 @@ def write_tokenizer(tokenizer_path, input_tokenizer_path):
 def main(argv):
     assert FLAGS.load_checkpoint != "" and FLAGS.output_dir != "" and FLAGS.tokenizer_path != ""
     assert FLAGS.model_size in LLAMA_STANDARD_CONFIGS
-    write_tokenizer(
-        tokenizer_path=FLAGS.output_dir,
-        input_tokenizer_path=FLAGS.tokenizer_path,
-    )
+    # write_tokenizer(
+    #     tokenizer_path=FLAGS.output_dir,
+    #     input_tokenizer_path=FLAGS.tokenizer_path,
+    # )
     write_model(
         load_and_convert_checkpoint(FLAGS.load_checkpoint),
         model_path=FLAGS.output_dir,
