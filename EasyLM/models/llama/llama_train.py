@@ -73,7 +73,7 @@ def make_inputs(
         for datum in batch_data
     ]
     input_ids = np.array(input_ids, dtype=np.int32)
-    positions = [datum["attention_mask"] for datum in batch_data]
+    positions = [datum["positions"] for datum in batch_data]
 
     batch_size = len(batch_data)
     attention_mask = np.zeros((batch_size, max_length, max_length), dtype=np.uint8)
