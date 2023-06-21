@@ -1,7 +1,6 @@
 import os
 
 import pprint
-from functools import partial
 
 from tqdm import tqdm, trange
 import numpy as np
@@ -40,7 +39,6 @@ FLAGS, FLAGS_DEF = mlxu.define_flags_with_default(
     tokenizer_path="tokenizer",
     data_path="data",
     output_dir="output",
-    logger_online=False,
     seed=42,
     mesh_dim='1,-1,1',
     dtype='fp16',
@@ -74,7 +72,7 @@ def make_inputs(
         for datum in batch_data
     ]
     input_ids = np.array(input_ids, dtype=np.int32)
-    positions = [datum["positions"] for datum in batch_data]
+    positions = [datum["attention_mask"] for datum in batch_data]
 
     batch_size = len(batch_data)
     attention_mask = np.zeros((batch_size, max_length, max_length), dtype=np.uint8)
@@ -132,7 +130,7 @@ def main(argv):
     JaxDistributedConfig.initialize(FLAGS.jax_distributed)
     variant = mlxu.get_user_flags(FLAGS, FLAGS_DEF)
     flags_config_dict = mlxu.user_flags_to_config_dict(FLAGS, FLAGS_DEF)
-    FLAGS.logger.online = FLAGS.logger_online
+
     logger = mlxu.WandBLogger(
         config=FLAGS.logger,
         variant=variant,
@@ -144,7 +142,6 @@ def main(argv):
     tokenizer = AutoTokenizer.from_pretrained(
         FLAGS.tokenizer_path,
     )
-    # dataset = CustomDataset(FLAGS, data_path, tokenizer)
     
     try:
         im_start_token = tokenizer.convert_token_to_id("<|im_start|>")
@@ -171,14 +168,7 @@ def main(argv):
     
     if not os.path.exists(FLAGS.output_dir):
         os.makedirs(FLAGS.output_dir)
-
-    # for batch in train_loader:
-    #     input_ids = batch["target_tokens"][0].tolist()
-    #     print(tokenizer.decode(input_ids))
-    #     print('-' * 20)
-    #     break
-    # exit(1)
-
+        
     # tokenizer = LLaMAConfig.get_tokenizer(FLAGS.tokenizer)
     # dataset = DatasetFactory.load_dataset(FLAGS.train_dataset, tokenizer)
     if FLAGS.load_dataset_state != '':
@@ -189,8 +179,6 @@ def main(argv):
             FLAGS.eval_dataset, dataset.tokenizer
         )
         eval_iterator = iter(eval_dataset)
-
-    # seq_length = dataset.seq_length
 
     if FLAGS.load_llama_config != '':
         llama_config = LLaMAConfig.load_config(FLAGS.load_llama_config)
