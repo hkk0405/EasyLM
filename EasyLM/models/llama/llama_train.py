@@ -35,6 +35,7 @@ from dataclasses import dataclass
 
 FLAGS, FLAGS_DEF = mlxu.define_flags_with_default(
     batch_size=1,
+    preprocessing_num_workers=1,
     seq_length=2048,
     tokenizer_path="tokenizer",
     data_path="data",
@@ -158,15 +159,14 @@ def main(argv):
         im_start_token=im_start_token,
         im_end_token=im_end_token,
     )
-    preprocessing_num_workers = 2
     train_loader = torch.utils.data.DataLoader(
         load_from_disk(FLAGS.data_path),
         batch_size=FLAGS.batch_size,
         shuffle=False,  # NOTE Data is already shuffled when serialized
-        num_workers=preprocessing_num_workers,
+        num_workers=FLAGS.preprocessing_num_workers,
         drop_last=True,
         collate_fn=data_collator,
-        persistent_workers=True if preprocessing_num_workers > 0 else False,
+        persistent_workers=True if FLAGS.preprocessing_num_workers > 0 else False,
     )
     
     if not os.path.exists(FLAGS.output_dir):
