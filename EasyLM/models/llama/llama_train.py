@@ -343,8 +343,10 @@ def main(argv):
         step_counter = trange(start_step, FLAGS.total_steps, ncols=0)
 
         # for step, (batch, dataset_metrics) in zip(step_counter, dataset):
+        num_tokens = 0
         for step, batch in zip(step_counter, train_loader):
             
+            num_tokens += batch["attention_mask"].sum()
             if step < start_step:
                 continue
             
@@ -363,7 +365,7 @@ def main(argv):
                         eval_metric_list.append(eval_metrics)
                     metrics.update(average_metrics(eval_metric_list))
 
-                log_metrics = {"step": step}
+                log_metrics = {"step": step, "num_tokens": num_tokens}
                 log_metrics.update(metrics)
                 # log_metrics.update(dataset_metrics)
                 log_metrics = jax.device_get(log_metrics)
