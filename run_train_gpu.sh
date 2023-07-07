@@ -2,10 +2,10 @@
 export WANDB_API_KEY='my wandb key'
 
 python3 -m EasyLM.models.llama.llama_train \
-    --mesh_dim='1,-1,1' \
+    --mesh_dim='1,1,1' \
     --total_steps=10000 \
     --tokenizer_path='tokenizer/32k' \
-    --data_path='gcs://donggyukimc/pretrain_tokens/0' \
+    --data_path='/data/donggyukimc/output/pretrain_tokens/0' \
     --output_dir='output' \
     --dtype='fp16' \
     --batch_size 2 \

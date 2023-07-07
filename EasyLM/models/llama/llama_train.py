@@ -50,6 +50,7 @@ FLAGS, FLAGS_DEF = mlxu.define_flags_with_default(
     log_freq=1000,
     save_model_freq=1000,
     save_milestone_freq=1000,
+    repeat_corpus=1,
     eval_steps=0,
     tokenizer=LLaMAConfig.get_tokenizer_config(),
     train_dataset=DatasetFactory.get_default_config(),
@@ -68,7 +69,7 @@ def make_inputs(
 ):
     
     input_ids = [
-        datum["input_ids"] + [tokenizer.pad_token_id] * (max_length - len(datum["input_ids"]))
+        datum["input_ids"][:max_length] + [tokenizer.pad_token_id] * (max_length - len(datum["input_ids"][:max_length]))
         for datum in batch_data
     ]
     input_ids = np.array(input_ids, dtype=np.int32)
@@ -84,6 +85,8 @@ def make_inputs(
     for i, position in enumerate(positions):
         start = 0
         for length in position:
+            if start >= max_length: continue
+            length = min(length, max_length)
             end = start + length
             mask = np.tril(np.ones((length, length), dtype=np.uint8))
             attention_mask[i, start:end, start:end] = mask
@@ -145,8 +148,7 @@ def main(argv):
         im_start_token = tokenizer.convert_token_to_id("<|im_start|>")
         im_end_token = tokenizer.convert_token_to_id("<|im_end|>")
     except:
-        im_start_token, im_end_token = None, None    
-    print(im_start_token, im_end_token)
+        im_start_token, im_end_token = 0, 1    
     
     data_collator = DataCollatorForSupervisedDataset(
         tokenizer=tokenizer, 
@@ -156,8 +158,10 @@ def main(argv):
     )
     
     datasets = []
-    for data_path in FLAGS.data_path.split(','):
-        datasets.append(load_from_disk(data_path))
+    for _ in range(FLAGS.repeat_corpus):
+        for data_path in FLAGS.data_path.split(','):
+            dataset = load_from_disk(data_path)
+            datasets.append(dataset)
     datasets = concatenate_datasets(datasets)
     
     train_loader = torch.utils.data.DataLoader(
@@ -196,7 +200,8 @@ def main(argv):
         # bos_token_id=dataset.tokenizer.bos_token_id,
         # eos_token_id=dataset.tokenizer.eos_token_id,
         bos_token_id=tokenizer.bos_token_id,
-        eos_token_id=tokenizer.eos_token_id
+        eos_token_id=tokenizer.eos_token_id,
+        max_sequence_length=FLAGS.seq_length
     ))
     if llama_config.vocab_size < tokenizer.vocab_size:
         llama_config.update(dict(vocab_size=tokenizer.vocab_size))
@@ -350,7 +355,7 @@ def main(argv):
         num_tokens = 0
         for step, batch in zip(step_counter, train_loader):
             
-            num_tokens += batch["attention_mask"].sum()
+            num_tokens += batch["loss_masks"].sum()
             if step < start_step:
                 continue
             
