@@ -83,6 +83,18 @@ LLAMA_STANDARD_CONFIGS = {
         'use_cache': True,
         'tie_word_embeddings': False,
     },
+    '20b': {
+        'vocab_size': 32000,
+        'hidden_size': 6144,
+        'intermediate_size': 24576,
+        'num_hidden_layers': 44,
+        'num_attention_heads': 64,
+        'max_sequence_length': 2048,
+        'initializer_range': 0.02,
+        'rms_norm_eps': 1e-6,
+        'use_cache': True,
+        'tie_word_embeddings': False,
+    },
     '30b': {
         'vocab_size': 32000,
         'hidden_size': 6656,
