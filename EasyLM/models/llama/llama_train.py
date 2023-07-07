@@ -28,7 +28,7 @@ from EasyLM.models.llama.llama_model import (
 import transformers
 from transformers import AutoTokenizer
 import torch
-from datasets import load_from_disk
+from datasets import load_from_disk, concatenate_datasets
 from dataclasses import dataclass
 
 
@@ -72,7 +72,7 @@ def make_inputs(
         for datum in batch_data
     ]
     input_ids = np.array(input_ids, dtype=np.int32)
-    positions = [datum["attention_mask"] for datum in batch_data]
+    positions = [datum["positions"] for datum in batch_data]
 
     batch_size = len(batch_data)
     attention_mask = np.zeros((batch_size, max_length, max_length), dtype=np.uint8)
@@ -139,9 +139,7 @@ def main(argv):
     set_random_seed(FLAGS.seed)
 
     # tokenizer = LLaMAConfig.get_tokenizer(FLAGS.tokenizer)
-    tokenizer = AutoTokenizer.from_pretrained(
-        FLAGS.tokenizer_path,
-    )
+    tokenizer = AutoTokenizer.from_pretrained(FLAGS.tokenizer_path)
     
     try:
         im_start_token = tokenizer.convert_token_to_id("<|im_start|>")
@@ -156,8 +154,14 @@ def main(argv):
         im_start_token=im_start_token,
         im_end_token=im_end_token,
     )
+    
+    datasets = []
+    for data_path in FLAGS.data_path.split(','):
+        datasets.append(load_from_disk(data_path))
+    datasets = concatenate_datasets(datasets)
+    
     train_loader = torch.utils.data.DataLoader(
-        load_from_disk(FLAGS.data_path),
+        datasets,
         batch_size=FLAGS.batch_size,
         shuffle=False,  # NOTE Data is already shuffled when serialized
         num_workers=FLAGS.preprocessing_num_workers,
