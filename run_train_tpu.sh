@@ -9,26 +9,23 @@ python3 -m EasyLM.models.llama.llama_train \
     --total_steps=10000000 \
     --tokenizer_path='tokenizer/32k' \
     --data_path='/mnt/disks/persist/pretrain_tokens/0/0' \
-    --output_dir='gcs://donggyukimc/checkpoint' \
+    --output_dir='gs://donggyukimc/checkpoint' \
     --dtype='fp16' \
-    --preprocessing_num_workers 16 \
-    --batch_size 512 \
+    --preprocessing_num_workers 4 \
+    --batch_size 128 \
     --seq_length 4096 \
     --log_freq 100 \
-    --save_model_freq=20000 \
-    --save_milestone_freq=20000 \
+    --save_model_freq=100000 \
+    --save_milestone_freq=100000 \
     --load_llama_config='13b' \
     --optimizer.type='adamw' \
-    --optimizer.accumulate_gradient_steps=1 \
+    --optimizer.accumulate_gradient_steps=4 \
     --optimizer.adamw_optimizer.weight_decay=0.1 \
     --optimizer.adamw_optimizer.lr=3e-4 \
     --optimizer.adamw_optimizer.end_lr=3e-5 \
-    --optimizer.adamw_optimizer.lr_warmup_steps=2000 \
+    --optimizer.adamw_optimizer.lr_warmup_steps=10000 \
     --optimizer.adamw_optimizer.lr_decay_steps=250000 \
-    --optimizer.adamw_optimizer.multiply_by_parameter_scale=True \
-    --optimizer.adamw_optimizer.bf16_momentum=True \
     --checkpointer.save_optimizer_state=True \
     --logger.online=True \
     --logger.project="pretrain" \
     --logger.output_dir="output"
-|& tee $HOME/output.txt
