@@ -8,8 +8,8 @@ python3 -m EasyLM.models.llama.llama_train \
     --mesh_dim='1,-1,1' \
     --total_steps=10000000 \
     --tokenizer_path='tokenizer/32k' \
-    --data_path='gs://donggyukimc/pretrain_tokens/0' \
-    --output_dir='gs://donggyukimc/checkpoint' \
+    --data_path='/mnt/disks/persist/pretrain_tokens/0/0' \
+    --output_dir='gcs://donggyukimc/checkpoint' \
     --dtype='fp16' \
     --preprocessing_num_workers 16 \
     --batch_size 512 \

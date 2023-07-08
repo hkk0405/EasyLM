@@ -5,6 +5,7 @@ import pprint
 from tqdm import tqdm, trange
 import numpy as np
 import mlxu
+import gcsfs
 
 import jax
 import jax.numpy as jnp
@@ -39,6 +40,7 @@ FLAGS, FLAGS_DEF = mlxu.define_flags_with_default(
     tokenizer_path="tokenizer",
     data_path="data",
     output_dir="output",
+    bucket_project_name='',
     seed=42,
     mesh_dim='1,-1,1',
     dtype='fp16',
@@ -157,10 +159,17 @@ def main(argv):
         im_end_token=im_end_token,
     )
     
+    fs = None
+    if FLAGS.bucket_project_name != '':
+        storage_options = {"project": FLAGS.bucket_project_name}
+        fs = gcsfs.GCSFileSystem(**storage_options)
     datasets = []
     for _ in range(FLAGS.repeat_corpus):
         for data_path in FLAGS.data_path.split(','):
-            dataset = load_from_disk(data_path)
+            if fs is not None:
+                dataset = load_from_disk(data_path, storage_options=fs.storage_options)
+            else:
+                dataset = load_from_disk(data_path)
             datasets.append(dataset)
     datasets = concatenate_datasets(datasets)
     
