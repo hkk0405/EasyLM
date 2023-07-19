@@ -85,7 +85,6 @@ def make_inputs_(
     
     batch_size = len(batch_data)
     
-    
     input_ids = torch.tensor(input_ids, dtype=torch.int32)
     attention_mask = torch.zeros(batch_size, max_length, max_length, dtype=torch.uint8)
     position_ids = torch.zeros(batch_size, max_length, dtype=torch.int32)
@@ -454,6 +453,9 @@ def main(argv):
         num_tokens = 0
         for step, batch in zip(step_counter, train_loader):
             
+            for k in batch.keys():
+                batch[k] = batch[k].numpy()
+                
             num_tokens += batch["loss_masks"].sum()
             # if step <= start_step:
             #     continue
