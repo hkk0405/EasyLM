@@ -1,4 +1,5 @@
 import os
+import wandb
 
 import pprint
 
@@ -54,6 +55,7 @@ FLAGS, FLAGS_DEF = mlxu.define_flags_with_default(
     save_milestone_freq=1000,
     repeat_corpus=1,
     eval_steps=0,
+    wandb_resume_id='',
     tokenizer=LLaMAConfig.get_tokenizer_config(),
     train_dataset=DatasetFactory.get_default_config(),
     eval_dataset=DatasetFactory.get_default_config(),
@@ -137,6 +139,10 @@ def main(argv):
     JaxDistributedConfig.initialize(FLAGS.jax_distributed)
     variant = mlxu.get_user_flags(FLAGS, FLAGS_DEF)
     flags_config_dict = mlxu.user_flags_to_config_dict(FLAGS, FLAGS_DEF)
+
+    if FLAGS.wandb_resume_id != '':
+        os.environ["WANDB_RESUME"] = "allow"
+        os.environ["WANDB_RUN_ID"] = wandb.util.generate_id()
 
     logger = mlxu.WandBLogger(
         config=FLAGS.logger,
