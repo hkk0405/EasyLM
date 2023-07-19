@@ -141,8 +141,10 @@ def main(argv):
     flags_config_dict = mlxu.user_flags_to_config_dict(FLAGS, FLAGS_DEF)
 
     if FLAGS.wandb_resume_id != '':
+        print("resume wandb experiment", FLAGS.wandb_resume_id)
         os.environ["WANDB_RESUME"] = "allow"
-        os.environ["WANDB_RUN_ID"] = wandb.util.generate_id()
+        os.environ["WANDB_RUN_ID"] = FLAGS.wandb_resume_id
+        FLAGS.logger.experiment_id = FLAGS.wandb_resume_id
 
     logger = mlxu.WandBLogger(
         config=FLAGS.logger,
@@ -373,7 +375,7 @@ def main(argv):
         for step, batch in zip(step_counter, train_loader):
             
             num_tokens += batch["loss_masks"].sum()
-            if step < start_step:
+            if step <= start_step:
                 continue
             
             train_state, sharded_rng, metrics = sharded_train_step(
