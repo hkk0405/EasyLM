@@ -162,7 +162,11 @@ class StreamingCheckpointer(object):
         else:
             params_shard_fns = None
 
-        load_type, load_path = load_from.split('::', 1)
+        # load_from = '_'.join(load_from.split('_')[:-1])
+        # load_type, load_path = load_from.split('::', 1)
+        load_path = load_from
+        load_type = "trainstate"
+        
         if disallow_trainstate:
             assert load_type != 'trainstate', 'Loading full trainstate is not allowed!'
         train_state = None
