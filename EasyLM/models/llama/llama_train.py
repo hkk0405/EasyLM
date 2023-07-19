@@ -368,7 +368,7 @@ def main(argv):
 
         sharded_rng = next_rng()
 
-        step_counter = trange(start_step, FLAGS.total_steps, ncols=0)
+        step_counter = trange(0, FLAGS.total_steps, ncols=0)
 
         # for step, (batch, dataset_metrics) in zip(step_counter, dataset):
         num_tokens = 0
