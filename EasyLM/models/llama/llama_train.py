@@ -22,7 +22,10 @@ from EasyLM.jax_utils import (
     set_random_seed, average_metrics, get_weight_decay_mask,
     make_shard_and_gather_fns, with_sharding_constraint,
 )
-from EasyLM.models.llama.llama_model import (
+# from EasyLM.models.llama.llama_model import (
+#     LLaMAConfig, FlaxLLaMAForCausalLMModule
+# )
+from EasyLM.models.llama.alibi_llama_model import (
     LLaMAConfig, FlaxLLaMAForCausalLMModule
 )
 
