@@ -26,7 +26,7 @@ python3 -m EasyLM.models.llama.llama_train \
     --optimizer.adamw_optimizer.lr_warmup_steps=10000 \
     --optimizer.adamw_optimizer.lr_decay_steps=250000 \
     --checkpointer.save_optimizer_state=True \
-    --logger.online=False \
+    --logger.online=True \
     --logger.project="test" \
     --logger.output_dir="output" \
     --bucket_project_name sackoh
