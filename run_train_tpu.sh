@@ -8,13 +8,13 @@ python3 -m EasyLM.models.llama.llama_train \
     --mesh_dim='1,-1,1' \
     --total_steps=10000000 \
     --tokenizer_path='tokenizer/32k' \
-    --data_path='data' \
-    --output_dir='gs://hcshiin/alibi_test' \
+    --data_path='/mnt/disks/persist/pretrain_tokens/0,/mnt/disks/persist/pretrain_tokens/1,/mnt/disks/persist/pretrain_tokens/2' \
+    --output_dir='gs://hcshiin/alibi_test2' \
     --dtype='bf16' \
-    --preprocessing_num_workers 4 \
+    --preprocessing_num_workers 8 \
     --batch_size 16 \
     --seq_length 4096 \
-    --log_freq 100 \
+    --log_freq 200 \
     --save_model_freq=100000 \
     --save_milestone_freq=100000 \
     --load_llama_config='1b' \

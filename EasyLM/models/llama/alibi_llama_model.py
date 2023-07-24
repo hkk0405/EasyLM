@@ -421,13 +421,13 @@ def get_alibi_slopes(heads):
 
 # alibi - paper version
 def get_relative_positions(seq_len: int) -> np.array:
-    x = np.arange(seq_len)[None, :]
-    y = np.arange(seq_len)[:, None]
+    x = jnp.arange(seq_len)[None, :]
+    y = jnp.arange(seq_len)[:, None]
     return x - y
 
 def calc_alibi_bias(seq_len, heads):
     slopes = get_alibi_slopes(heads)
-    slopes = rearrange(np.array(slopes), 'h -> h 1 1')
+    slopes = rearrange(jnp.array(slopes), 'h -> h 1 1')
     bias = rearrange(get_relative_positions(seq_len), 'i j -> 1 i j')
     return slopes * bias
 

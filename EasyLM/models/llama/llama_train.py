@@ -1,4 +1,5 @@
 import os
+import wandb
 
 import pprint
 
@@ -57,6 +58,7 @@ FLAGS, FLAGS_DEF = mlxu.define_flags_with_default(
     save_milestone_freq=1000,
     repeat_corpus=1,
     eval_steps=0,
+    wandb_resume_id='',
     tokenizer=LLaMAConfig.get_tokenizer_config(),
     train_dataset=DatasetFactory.get_default_config(),
     eval_dataset=DatasetFactory.get_default_config(),
@@ -95,6 +97,13 @@ def make_inputs(
             end = start + length
             mask = np.tril(np.ones((length, length), dtype=np.uint8))
             attention_mask[i, start:end, start:end] = mask
+            '''
+            ValueError: could not broadcast input array from shape (1024,1024) into shape (447,447)
+            - seq_length=1024, 시퀀스 팩킹 과정에서 새롭게 붙여야하는 데이터의 길이가 남아 있는 공간보다 큰 경우 나타나는 에러
+            -- 생성된 데이터와 연관된 문제 일 수 있음으로 특별한 조치 없이 seq_length를 늘려서 try
+            -- 데이터 생성시에 이미 4096 길이를 감안하고 데이터가 생성되어 있어 그 보다 작은 길이로 모델이 구성될 때 발생할 수 있는 경우에 대한 대응이 없는 것으로 보임
+            -- 동규님한테 확인 필요
+            '''
             position_ids[i, start:end] = np.arange(length)
             target_tokens[i, start:end - 1] = input_ids[i, start + 1:end]
             start = end
@@ -106,12 +115,19 @@ def make_inputs(
     # loss_mask[input_ids == im_start_token] = 0
     loss_mask[input_ids == im_end_token] = 0
         
+    # batch = {
+    #     'input_tokens': input_ids,
+    #     'attention_mask': attention_mask,
+    #     'position_ids': position_ids,
+    #     'target_tokens': target_tokens,
+    #     'loss_masks': loss_mask,
+    # }
     batch = {
-        'input_tokens': input_ids,
-        'attention_mask': attention_mask,
-        'position_ids': position_ids,
-        'target_tokens': target_tokens,
-        'loss_masks': loss_mask,
+        'input_tokens': torch.tensor(input_ids, dtype=torch.int32),
+        'attention_mask': torch.tensor(attention_mask, dtype=torch.uint8),
+        'position_ids': torch.tensor(position_ids, dtype=torch.int32),
+        'target_tokens': torch.tensor(target_tokens, dtype=torch.int32),
+        'loss_masks': torch.tensor(loss_mask, dtype=torch.uint8),
     }
     return batch
 
@@ -140,6 +156,12 @@ def main(argv):
     JaxDistributedConfig.initialize(FLAGS.jax_distributed)
     variant = mlxu.get_user_flags(FLAGS, FLAGS_DEF)
     flags_config_dict = mlxu.user_flags_to_config_dict(FLAGS, FLAGS_DEF)
+
+    if FLAGS.wandb_resume_id != '':
+        print("resume wandb experiment", FLAGS.wandb_resume_id)
+        os.environ["WANDB_RESUME"] = "allow"
+        os.environ["WANDB_RUN_ID"] = FLAGS.wandb_resume_id
+        FLAGS.logger.experiment_id = FLAGS.wandb_resume_id
 
     logger = mlxu.WandBLogger(
         config=FLAGS.logger,
@@ -178,15 +200,15 @@ def main(argv):
             datasets.append(dataset)
     datasets = concatenate_datasets(datasets)
     
-    train_loader = torch.utils.data.DataLoader(
-        datasets,
-        batch_size=FLAGS.batch_size,
-        shuffle=False,  # NOTE Data is already shuffled when serialized
-        num_workers=FLAGS.preprocessing_num_workers,
-        drop_last=True,
-        collate_fn=data_collator,
-        persistent_workers=True if FLAGS.preprocessing_num_workers > 0 else False,
-    )
+    # train_loader = torch.utils.data.DataLoader(
+    #     datasets,
+    #     batch_size=FLAGS.batch_size,
+    #     shuffle=False,  # NOTE Data is already shuffled when serialized
+    #     num_workers=FLAGS.preprocessing_num_workers,
+    #     drop_last=True,
+    #     collate_fn=data_collator,
+    #     persistent_workers=True if FLAGS.preprocessing_num_workers > 0 else False,
+    # )
     
     if not os.path.exists(FLAGS.output_dir):
         os.makedirs(FLAGS.output_dir)
@@ -358,6 +380,16 @@ def main(argv):
         start_step = int(jax.device_get(train_state.step))
         print(f"Start at {start_step} steps...")
 
+        train_loader = torch.utils.data.DataLoader(
+            datasets.select(range(int(start_step * FLAGS.batch_size), len(datasets))),
+            batch_size=FLAGS.batch_size,
+            shuffle=False,  # NOTE Data is already shuffled when serialized
+            num_workers=FLAGS.preprocessing_num_workers,
+            drop_last=True,
+            collate_fn=data_collator,
+            persistent_workers=True if FLAGS.preprocessing_num_workers > 0 else False,
+        )
+
         if FLAGS.save_model_freq > 0:
             save_checkpoint(train_state)
 
@@ -369,9 +401,12 @@ def main(argv):
         num_tokens = 0
         for step, batch in zip(step_counter, train_loader):
             
+            for k in batch.keys():
+                batch[k] = batch[k].numpy()
+                
             num_tokens += batch["loss_masks"].sum()
-            if step < start_step:
-                continue
+            # if step <= start_step:
+            #     continue
             
             train_state, sharded_rng, metrics = sharded_train_step(
                 train_state, sharded_rng, batch
