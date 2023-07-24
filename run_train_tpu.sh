@@ -8,11 +8,11 @@ python3 -m EasyLM.models.llama.llama_train \
     --mesh_dim='1,-1,1' \
     --total_steps=10000000 \
     --tokenizer_path='tokenizer/32k' \
-    --data_path='gs://donggyukimc/pretrain_tokens/0' \
+    --data_path='data' \
     --output_dir='gs://hcshiin/alibi_test' \
     --dtype='bf16' \
     --preprocessing_num_workers 4 \
-    --batch_size 128 \
+    --batch_size 16 \
     --seq_length 4096 \
     --log_freq 100 \
     --save_model_freq=100000 \
@@ -28,4 +28,5 @@ python3 -m EasyLM.models.llama.llama_train \
     --checkpointer.save_optimizer_state=True \
     --logger.online=False \
     --logger.project="test" \
-    --logger.output_dir="output"
+    --logger.output_dir="output" \
+    --bucket_project_name sackoh
