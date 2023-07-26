@@ -106,22 +106,21 @@ def make_inputs(
             '''
             position_ids[i, start:end] = np.arange(length)
             target_tokens[i, start:end - 1] = input_ids[i, start + 1:end]
+            
+            # mask out first message start token, and first utterance
+            sample_input_ids = input_ids[i, start:end]
+            start_token_positions = np.where(sample_input_ids == im_start_token)[0]
+            if len(start_token_positions) > 0:
+                loss_mask[i, start] = 0
+            if len(start_token_positions) > 1:
+                loss_mask[i, start:start+start_token_positions[1]] = 0
+            
             start = end
         loss_mask[i, start:] = 0
-        if input_ids[i, 0] == im_start_token:
-            loss_mask[i, 0] = 0
-    
+
     target_tokens[target_tokens == im_end_token] = tokenizer.eos_token_id
-    # loss_mask[input_ids == im_start_token] = 0
     loss_mask[input_ids == im_end_token] = 0
         
-    # batch = {
-    #     'input_tokens': input_ids,
-    #     'attention_mask': attention_mask,
-    #     'position_ids': position_ids,
-    #     'target_tokens': target_tokens,
-    #     'loss_masks': loss_mask,
-    # }
     batch = {
         'input_tokens': torch.tensor(input_ids, dtype=torch.int32),
         'attention_mask': torch.tensor(attention_mask, dtype=torch.uint8),
@@ -440,4 +439,7 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    import tensorflow.compat.v2 as tf2
+    
+    tf2.profiler.experimental.server.start(6000)
     mlxu.run(main)
