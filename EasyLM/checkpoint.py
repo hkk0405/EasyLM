@@ -162,6 +162,7 @@ class StreamingCheckpointer(object):
         else:
             params_shard_fns = None
 
+        ## the way to parse checkpoint path is incorrect in the original code, so i temperarly set the load type to "trainstate"
         # load_from = '_'.join(load_from.split('_')[:-1])
         # load_type, load_path = load_from.split('::', 1)
         load_path = load_from
@@ -213,4 +214,6 @@ class StreamingCheckpointer(object):
         else:
             raise ValueError(f'Invalid load_from type: {load_type}')
 
-        return train_state, restored_params
+        metadata = mlxu.load_pickle(load_path.replace("streaming_train_state", "metadata") + ".pkl")
+
+        return train_state, restored_params, metadata

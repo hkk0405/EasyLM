@@ -67,68 +67,6 @@ FLAGS, FLAGS_DEF = mlxu.define_flags_with_default(
     jax_distributed=JaxDistributedConfig.get_default_config(),
 )
 
-def make_inputs_(
-    batch_data, tokenizer, max_length, im_start_token, im_end_token
-):
-    
-    input_ids = [
-        datum["input_ids"][:max_length] + [tokenizer.pad_token_id] * (max_length - len(datum["input_ids"][:max_length]))
-        for datum in batch_data
-    ]
-    
-    positions = [datum["positions"] for datum in batch_data]
-
-    attention_mask = None
-    position_ids = None
-    target_tokens = None
-    loss_mask = None
-    
-    batch_size = len(batch_data)
-    
-    input_ids = torch.tensor(input_ids, dtype=torch.int32)
-    attention_mask = torch.zeros(batch_size, max_length, max_length, dtype=torch.uint8)
-    position_ids = torch.zeros(batch_size, max_length, dtype=torch.int32)
-    target_tokens = torch.zeros(batch_size, max_length, dtype=torch.int32)
-    loss_mask = torch.ones(batch_size, max_length, dtype=torch.uint8)
-    target_tokens.fill_(tokenizer.eos_token_id)
-
-    # input_ids = np.array(input_ids, dtype=np.int32)
-    # attention_mask = np.zeros((batch_size, max_length, max_length), dtype=np.uint8)
-    # position_ids = np.zeros((batch_size, max_length), dtype=np.int32)
-    # target_tokens = np.zeros((batch_size, max_length), dtype=np.int32)
-    # target_tokens.fill(tokenizer.eos_token_id)
-    # loss_mask = np.ones((batch_size, max_length), dtype=np.uint8)
-    
-    for i, position in enumerate(positions):
-        start = 0
-        for length in position:
-            if start >= max_length: continue
-            length = min(length, max_length)
-            end = start + length
-            # mask = np.tril(np.ones((length, length), dtype=np.uint8))
-            mask = torch.tril(torch.ones(length, length, dtype=torch.uint8))
-            attention_mask[i, start:end, start:end] = mask
-            # position_ids[i, start:end] = np.arange(length)
-            position_ids[i, start:end] = torch.arange(length)
-            target_tokens[i, start:end - 1] = input_ids[i, start + 1:end]
-            start = end
-        loss_mask[i, start:] = 0
-        if input_ids[i, 0].item() == im_start_token:
-            loss_mask[i, 0] = 0
-
-    target_tokens[target_tokens == im_end_token] = tokenizer.eos_token_id
-    # loss_mask[input_ids == im_start_token] = 0
-    loss_mask[input_ids == im_end_token] = 0
-        
-    batch = {
-        'input_tokens': input_ids,
-        'attention_mask': attention_mask,
-        'position_ids': position_ids,
-        'target_tokens': target_tokens,
-        'loss_masks': loss_mask,
-    }
-    return batch
-
 
 def make_inputs(
     batch_data, tokenizer, max_length, im_start_token, im_end_token
@@ -164,16 +102,8 @@ def make_inputs(
             loss_mask[i, 0] = 0
     
     target_tokens[target_tokens == im_end_token] = tokenizer.eos_token_id
-    # loss_mask[input_ids == im_start_token] = 0
     loss_mask[input_ids == im_end_token] = 0
         
-    # batch = {
-    #     'input_tokens': input_ids,
-    #     'attention_mask': attention_mask,
-    #     'position_ids': position_ids,
-    #     'target_tokens': target_tokens,
-    #     'loss_masks': loss_mask,
-    # }
     batch = {
         'input_tokens': torch.tensor(input_ids, dtype=torch.int32),
         'attention_mask': torch.tensor(attention_mask, dtype=torch.uint8),
@@ -397,10 +327,11 @@ def main(argv):
         donate_argnums=(1,),
     )
 
-    def save_checkpoint(train_state, milestone=False):
+    def save_checkpoint(train_state, milestone=False, num_tokens=0):
         step = int(jax.device_get(train_state.step))
         metadata = dict(
             step=step,
+            num_tokens=num_tokens,
             variant=variant,
             flags=flags_config_dict,
             llama_config=llama_config.to_dict(),
@@ -417,7 +348,7 @@ def main(argv):
     with mesh:
         train_state, restored_params = None, None
         if FLAGS.load_checkpoint != '':
-            train_state, restored_params = checkpointer.load_trainstate_checkpoint(
+            train_state, restored_params, metadata = checkpointer.load_trainstate_checkpoint(
                 FLAGS.load_checkpoint, train_state_shapes, shard_fns
             )
 
@@ -442,6 +373,8 @@ def main(argv):
             persistent_workers=True if FLAGS.preprocessing_num_workers > 0 else False,
         )
 
+        num_tokens = metadata.get("num_tokens", 0)
+
         if FLAGS.save_model_freq > 0:
             save_checkpoint(train_state)
 
@@ -450,16 +383,13 @@ def main(argv):
         step_counter = trange(start_step, FLAGS.total_steps, ncols=0)
 
         # for step, (batch, dataset_metrics) in zip(step_counter, dataset):
-        num_tokens = 0
         for step, batch in zip(step_counter, train_loader):
             
             for k in batch.keys():
                 batch[k] = batch[k].numpy()
                 
             num_tokens += batch["loss_masks"].sum()
-            # if step <= start_step:
-            #     continue
-            
+
             train_state, sharded_rng, metrics = sharded_train_step(
                 train_state, sharded_rng, batch
             )
