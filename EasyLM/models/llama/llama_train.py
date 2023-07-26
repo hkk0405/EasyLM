@@ -376,7 +376,7 @@ def main(argv):
         num_tokens = metadata.get("num_tokens", 0)
 
         if FLAGS.save_model_freq > 0:
-            save_checkpoint(train_state)
+            save_checkpoint(train_state, num_tokens=num_tokens)
 
         sharded_rng = next_rng()
 
@@ -413,12 +413,12 @@ def main(argv):
                 tqdm.write("\n" + pprint.pformat(log_metrics) + "\n")
 
             if FLAGS.save_milestone_freq > 0 and (step + 1) % FLAGS.save_milestone_freq == 0:
-                save_checkpoint(train_state, milestone=True)
+                save_checkpoint(train_state, milestone=True, num_tokens=num_tokens)
             elif FLAGS.save_model_freq > 0 and (step + 1) % FLAGS.save_model_freq == 0:
-                save_checkpoint(train_state)
+                save_checkpoint(train_state, num_tokens=num_tokens)
 
         if FLAGS.save_model_freq > 0:
-            save_checkpoint(train_state)
+            save_checkpoint(train_state, num_tokens=num_tokens)
 
 
 if __name__ == "__main__":
