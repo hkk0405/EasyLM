@@ -101,7 +101,9 @@ def match_keywords(string, positives, negatives):
 
 
 def load_and_convert_checkpoint(path):
-    _, flax_params = StreamingCheckpointer.load_trainstate_checkpoint(path)
+    # _, flax_params = StreamingCheckpointer.load_trainstate_checkpoint(path)
+    flax_params, _, _ = StreamingCheckpointer.load_trainstate_checkpoint(path)
+    print(flax_params.keys())
     flax_params = flatten_dict(flax_params['params'], sep='.')
     torch_params = {}
     for key, tensor in flax_params.items():
@@ -141,6 +143,13 @@ def write_model(loaded, model_path, model_size):
     def permute(w):
         return w.view(n_heads, dim // n_heads // 2, 2, dim).transpose(1, 2).reshape(dim, dim)
 
+    k_list = list(loaded.keys())
+    for k in k_list:
+        _k = k.replace("params.", '')
+        loaded[_k] = loaded.pop(k)
+
+    with open("out.txt", 'w') as f:
+        f.write(str(loaded.keys()))
 
     param_count = 0
     index_dict = {"weight_map": {}}
