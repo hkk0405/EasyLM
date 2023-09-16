@@ -353,6 +353,7 @@ def main(argv):
 
     mesh = LLaMAConfig.get_jax_mesh(FLAGS.mesh_dim)
     with mesh:
+        metadata = {}
         train_state, restored_params = None, None
         if FLAGS.load_checkpoint != '':
             train_state, restored_params, metadata = checkpointer.load_trainstate_checkpoint(
