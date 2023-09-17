@@ -246,9 +246,9 @@ def main(argv):
     def init_fn(rng):
         rng_generator = JaxRNG(rng)
         params = model.init(
-            input_ids=jnp.zeros((FLAGS.batch_size, FLAGS.seq_length), dtype=jnp.int32),
-            position_ids=jnp.zeros((FLAGS.batch_size, FLAGS.seq_length), dtype=jnp.int32),
-            attention_mask=jnp.ones((FLAGS.batch_size, FLAGS.seq_length, FLAGS.seq_length), dtype=jnp.int32),
+            input_ids=jnp.zeros((1, FLAGS.seq_length), dtype=jnp.int32),
+            position_ids=jnp.zeros((1, FLAGS.seq_length), dtype=jnp.int32),
+            attention_mask=jnp.ones((1, FLAGS.seq_length, FLAGS.seq_length), dtype=jnp.int32),
             rngs=rng_generator(llama_config.rng_keys()),
         )
         return TrainState.create(params=params, tx=optimizer, apply_fn=None)
