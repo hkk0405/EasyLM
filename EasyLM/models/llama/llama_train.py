@@ -91,7 +91,7 @@ def make_inputs(
         for length in position:
             if start >= max_length: continue
             length = min(length, max_length)
-            end = start + length
+            end = min(start + length, max_length)
             mask = np.tril(np.ones((length, length), dtype=np.uint8))
             attention_mask[i, start:end, start:end] = mask
             position_ids[i, start:end] = np.arange(length)
