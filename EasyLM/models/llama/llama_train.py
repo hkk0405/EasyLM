@@ -80,41 +80,47 @@ def make_inputs(
     positions = [datum["positions"] for datum in batch_data]
 
     batch_size = len(batch_data)
-    attention_mask = np.zeros((batch_size, max_length, max_length), dtype=np.uint8)
-    position_ids = np.zeros((batch_size, max_length), dtype=np.int32)
+    # attention_mask = np.zeros((batch_size, max_length, max_length), dtype=np.uint8)
+    # position_ids = np.zeros((batch_size, max_length), dtype=np.int32)
     target_tokens = np.zeros((batch_size, max_length), dtype=np.int32)
     target_tokens.fill(tokenizer.eos_token_id)
     loss_mask = np.ones((batch_size, max_length), dtype=np.uint8)
     
     for i, position in enumerate(positions):
-        start = 0
-        for length in position:
-            if start >= max_length: continue
-            length = min(length, max_length)
-            end = min(start + length, max_length)
-            mask = np.tril(np.ones((length, length), dtype=np.uint8))
-            attention_mask[i, start:end, start:end] = mask
-            position_ids[i, start:end] = np.arange(length)
-            target_tokens[i, start:end - 1] = input_ids[i, start + 1:end]
+        try:
+            start = 0
+            for length in position:
+                if start >= max_length: continue
+                length = min(length, max_length)
+                end = min(start + length, max_length)
+                # mask = np.tril(np.ones((length, length), dtype=np.uint8))
+                # attention_mask[i, start:end, start:end] = mask
+                # position_ids[i, start:end] = np.arange(length)
+                target_tokens[i, start:end - 1] = input_ids[i, start + 1:end]
 
-            # mask out first message start token, and first utterance
-            sample_input_ids = input_ids[i, start:end]
-            start_token_positions = np.where(sample_input_ids == im_start_token)[0]
-            if len(start_token_positions) > 0:
-                loss_mask[i, start] = 0
-            if len(start_token_positions) > 1:
-                loss_mask[i, start:start + start_token_positions[1]] = 0
-            
-            start = end
-        loss_mask[i, start:] = 0
+                # mask out first message start token, and first utterance
+                sample_input_ids = input_ids[i, start:end]
+                start_token_positions = np.where(sample_input_ids == im_start_token)[0]
+                if len(start_token_positions) > 0:
+                    loss_mask[i, start] = 0
+                if len(start_token_positions) > 1:
+                    loss_mask[i, start:start + start_token_positions[1]] = 0
+                
+                start = end
+            loss_mask[i, start:] = 0
+        except:
+            loss_mask[i, :] = 0
     
     target_tokens[target_tokens == im_end_token] = tokenizer.eos_token_id
     loss_mask[input_ids == im_end_token] = 0
+    loss_mask[input_ids == tokenizer.eos_token_id] = 0
         
     batch = {
         'input_tokens': torch.tensor(input_ids, dtype=torch.int32),
-        'attention_mask': torch.tensor(attention_mask, dtype=torch.uint8),
-        'position_ids': torch.tensor(position_ids, dtype=torch.int32),
+        # 'attention_mask': torch.tensor(attention_mask, dtype=torch.uint8),
+        'attention_mask': None,
+        # 'position_ids': torch.tensor(position_ids, dtype=torch.int32),
+        'position_ids': None,
         'target_tokens': torch.tensor(target_tokens, dtype=torch.int32),
         'loss_masks': torch.tensor(loss_mask, dtype=torch.uint8),
     }
@@ -248,7 +254,8 @@ def main(argv):
         params = model.init(
             input_ids=jnp.zeros((FLAGS.batch_size, FLAGS.seq_length), dtype=jnp.int32),
             position_ids=jnp.zeros((FLAGS.batch_size, FLAGS.seq_length), dtype=jnp.int32),
-            attention_mask=jnp.ones((FLAGS.batch_size, FLAGS.seq_length, FLAGS.seq_length), dtype=jnp.int32),
+            # attention_mask=jnp.ones((FLAGS.batch_size, FLAGS.seq_length, FLAGS.seq_length), dtype=jnp.int32),
+            attention_mask=jnp.ones((FLAGS.batch_size, FLAGS.seq_length), dtype=jnp.int32),
             rngs=rng_generator(llama_config.rng_keys()),
         )
         return TrainState.create(params=params, tx=optimizer, apply_fn=None)
@@ -394,6 +401,8 @@ def main(argv):
         for step, batch in zip(step_counter, train_loader):
             
             for k in batch.keys():
+                if batch[k] is None:
+                    continue
                 batch[k] = batch[k].numpy()
                 
             num_tokens += batch["loss_masks"].sum()
