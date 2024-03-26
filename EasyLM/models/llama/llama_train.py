@@ -390,8 +390,8 @@ def main(argv):
 
         num_tokens = metadata.get("num_tokens", 0)
 
-        if FLAGS.save_model_freq > 0:
-            save_checkpoint(train_state, num_tokens=num_tokens)
+        # if FLAGS.save_model_freq > 0:
+        #     save_checkpoint(train_state, num_tokens=num_tokens)
 
         sharded_rng = next_rng()
 
