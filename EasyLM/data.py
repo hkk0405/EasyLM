@@ -1,17 +1,11 @@
-import dataclasses
-import pprint
 import time
 from functools import partial
 import json
+import base64
 from multiprocessing import Pool
 
-import h5py
 import mlxu
-from ml_collections.config_dict import config_dict
-from ml_collections import ConfigDict
-from tqdm import tqdm, trange
 import numpy as np
-
 from datasets import load_dataset
 
 
@@ -20,15 +14,12 @@ class DatasetFactory(object):
 
     @staticmethod
     def get_default_config(updates=None):
-        config = ConfigDict()
+        config = mlxu.config_dict()
         config.type = 'huggingface'
         config.text_processor = TextProcessor.get_default_config()
         config.huggingface_dataset = HuggingfaceDataset.get_default_config()
         config.json_dataset = JsonDataset.get_default_config()
-
-        if updates is not None:
-            config.update(ConfigDict(updates).copy_and_resolve_references())
-        return config
+        return mlxu.update_config_dict(config, updates)
 
     @classmethod
     def load_dataset(cls, config, tokenizer, **kwargs):
@@ -52,16 +43,15 @@ class TextProcessor(object):
 
     @staticmethod
     def get_default_config(updates=None):
-        config = ConfigDict()
+        config = mlxu.config_dict()
         config.fields_from_example = ''
         config.fields = ''
         config.subfield_separator = ' '
         config.add_bos_token = True
         config.add_eos_token = True
         config.prepend_text = ''
-        if updates is not None:
-            config.update(ConfigDict(updates).copy_and_resolve_references())
-        return config
+        config.base64_token_dtype = 'i4'
+        return mlxu.update_config_dict(config, updates)
 
     def __init__(self, config, tokenizer):
         self.config = self.get_default_config(config)
@@ -95,12 +85,26 @@ class TextProcessor(object):
             else:
                 mask = 1.0
 
-            if field == '<|bos|>':
-                token_buffer.append(self.tokenizer.bos_token_id)
+            if field.startswith('<|') and field.endswith('|>'):
+                # Special tokens.
+                field = field[2:-2]
+                if field == 'bos':
+                    token_buffer.append(self.tokenizer.bos_token_id)
+                elif field == 'eos':
+                    token_buffer.append(self.tokenizer.eos_token_id)
+                else:
+                    # Token ID specified directly.
+                    token_buffer.append(int(field))
                 loss_mask_buffer.append(mask)
-            elif field == '<|eos|>':
-                token_buffer.append(self.tokenizer.eos_token_id)
-                loss_mask_buffer.append(mask)
+            elif field.startswith('{') and field.endswith('}'):
+                field = field[1:-1]
+                # Base64 encoded raw tokens.
+                tokens = np.frombuffer(
+                    base64.b64decode(example[field]),
+                    dtype=self.config.base64_token_dtype
+                ).tolist()
+                token_buffer.extend(tokens)
+                loss_mask_buffer.extend([mask for _ in range(len(tokens))])
             else:
                 subfields = field.split('+')
                 text = self.config.subfield_separator.join(
@@ -108,7 +112,7 @@ class TextProcessor(object):
                 )
                 if i == 0:
                     text = self.config.prepend_text + text
-                tokens = self.tokenizer.encode(text)
+                tokens = self.tokenizer.encode(text, add_special_tokens=False)
                 token_buffer.extend(tokens)
                 loss_mask_buffer.extend([mask for _ in range(len(tokens))])
 
@@ -126,7 +130,7 @@ class HuggingfaceDataset(object):
 
     @staticmethod
     def get_default_config(updates=None):
-        config = ConfigDict()
+        config = mlxu.config_dict()
         config.path = 'c4'
         config.name = 'en'
         config.split = 'train'
@@ -134,10 +138,8 @@ class HuggingfaceDataset(object):
         config.seq_length = 1024
         config.batch_size = 8
         config.always_start_with_bos = False
-
-        if updates is not None:
-            config.update(ConfigDict(updates).copy_and_resolve_references())
-        return config
+        config.batch_token_dtype = 'i4'
+        return mlxu.update_config_dict(config, updates)
 
     def __init__(self, config, tokenizer, text_processor):
         self.config = self.get_default_config(config)
@@ -166,10 +168,10 @@ class HuggingfaceDataset(object):
                         'dataset_total_tokens': total_tokens,
                     }
                     batch = {
-                        'input_tokens': np.array(token_buffer[:chunk_size], dtype=np.int32).reshape(
+                        'input_tokens': np.array(token_buffer[:chunk_size], dtype=self.config.batch_token_dtype).reshape(
                             self.config.batch_size, -1
                         ),
-                        'target_tokens': np.array(token_buffer[1:chunk_size + 1], dtype=np.int32).reshape(
+                        'target_tokens': np.array(token_buffer[1:chunk_size + 1], dtype=self.config.batch_token_dtype).reshape(
                             self.config.batch_size, -1
                         ),
                         'loss_masks': np.array(loss_mask_buffer[1:chunk_size + 1], dtype=np.float32).reshape(
@@ -187,7 +189,7 @@ class HuggingfaceDataset(object):
 
     def load_state_dict(self, state_dict):
         if 'config' in state_dict:
-            self.config.update(ConfigDict(state_dict['config']))
+            self.config.update(mlxu.ConfigDict(state_dict['config']))
 
     @property
     def seq_length(self):
@@ -217,7 +219,7 @@ class JsonDataset(object):
 
     @staticmethod
     def get_default_config(updates=None):
-        config = ConfigDict()
+        config = mlxu.config_dict()
         config.path = ''
         config.seq_length = 1024
         config.batch_size = 8
@@ -229,10 +231,7 @@ class JsonDataset(object):
         config.tokenizer_parallel_chunk_size = 32
         config.tokenizer_parallel_batch_size = 1024
         config.throughput_average_window_size = 200
-
-        if updates is not None:
-            config.update(ConfigDict(updates).copy_and_resolve_references())
-        return config
+        return mlxu.update_config_dict(config, updates)
 
     def __init__(self, config, tokenizer, text_processor):
         self.config = self.get_default_config(config)
@@ -359,7 +358,7 @@ class JsonDataset(object):
 
     def load_state_dict(self, state_dict):
         if 'config' in state_dict:
-            self.config.update(ConfigDict(state_dict['config']))
+            self.config.update(mlxu.ConfigDict(state_dict['config']))
         self._index = state_dict.get('index', self.config.example_index_at_start)
         self._file_loc = state_dict.get('file_loc', self.config.start_seek_loc)
         self._total_tokens = state_dict.get('total_tokens', self.config.tokens_count_at_start)
