@@ -229,7 +229,7 @@ class LLaMAConfigurator(object):
                 num_hidden_layers=24,
                 num_attention_heads=16,
                 num_key_value_heads=8,
-                max_position_embeddings=8192,
+                max_position_embeddings=8196,
                 rms_norm_eps=1e-5,
                 rope_theta=5e5,
             ),
