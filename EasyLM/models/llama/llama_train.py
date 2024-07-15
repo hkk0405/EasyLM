@@ -221,7 +221,7 @@ def main(argv):
         )
         eval_iterator = iter(eval_dataset)
 
-    seq_length = dataset.seq_length
+    # seq_length = FLAGS.seq_length
     llama_config = LLaMAConfigurator.finalize_config(FLAGS.llama)
 
     model = FlaxLLaMAForCausalLMModule(
