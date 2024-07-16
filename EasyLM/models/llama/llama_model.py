@@ -18,223 +18,256 @@ from flax.traverse_util import flatten_dict, unflatten_dict
 from flax.linen import partitioning as nn_partitioning
 import einops
 
+import sentencepiece as spm
 from transformers.configuration_utils import PretrainedConfig
+from transformers.utils import logging
+from transformers.tokenization_utils import PreTrainedTokenizer
 from transformers.modeling_flax_outputs import FlaxBaseModelOutput, FlaxCausalLMOutput
-from transformers.modeling_flax_utils import FlaxPreTrainedModel
-import mlxu
+from transformers.modeling_flax_utils import ACT2FN, FlaxPreTrainedModel, append_call_sample_docstring
+from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging
 
+from ml_collections import ConfigDict
+from ml_collections.config_dict import config_dict
+from mlxu import function_args_to_config, load_pickle, open_file
 from EasyLM.bpt import blockwise_ffn, blockwise_attn
+
 from EasyLM.jax_utils import (
     with_sharding_constraint, get_jax_mesh, get_gradient_checkpoint_policy
 )
 
+            
+LLAMA_STANDARD_CONFIGS = {
+    'llama3_1b': {
+        'vocab_size': 32000,
+        'hidden_size': 2048,
+        'intermediate_size': 5632,
+        'num_hidden_layers': 24,
+        'num_attention_heads': 16,
+        'num_key_value_heads': 8,
+        'max_position_embeddings': 8196,
+        'rms_norm_eps': 1e-5,
+        'rope_theta': 5e5,
+    },
+    'tiny': {
+        'vocab_size': 32000,
+        'hidden_size': 64,
+        'intermediate_size': 128,
+        'num_hidden_layers': 2,
+        'num_attention_heads': 2,
+        'max_sequence_length': 2048,
+        'initializer_range': 0.02,
+        'rms_norm_eps': 1e-6,
+        'use_cache': True,
+        'tie_word_embeddings': False,
+    },
+    '1b': {
+        'vocab_size': 32000,
+        'hidden_size': 2048,
+        'intermediate_size': 5632,
+        'num_hidden_layers': 24,
+        'num_attention_heads': 32,
+        'max_sequence_length': 2048,
+        'initializer_range': 0.02,
+        'rms_norm_eps': 1e-6,
+        'use_cache': True,
+        'tie_word_embeddings': False,
+    },
+    '3b': {
+        'vocab_size': 32000,
+        'hidden_size': 3200,
+        'intermediate_size': 8640,
+        'num_hidden_layers': 26,
+        'num_attention_heads': 32,
+        'max_sequence_length': 2048,
+        'initializer_range': 0.02,
+        'rms_norm_eps': 1e-6,
+        'use_cache': True,
+        'tie_word_embeddings': False,
+    },
+    '7b': {
+        'vocab_size': 32000,
+        'hidden_size': 4096,
+        'intermediate_size': 11008,
+        'num_hidden_layers': 32,
+        'num_attention_heads': 32,
+        'max_sequence_length': 2048,
+        'initializer_range': 0.02,
+        'rms_norm_eps': 1e-6,
+        'use_cache': True,
+        'tie_word_embeddings': False,
+    },
+    '13b': {
+        'vocab_size': 32000,
+        'hidden_size': 5120,
+        'intermediate_size': 13824,
+        'num_hidden_layers': 40,
+        'num_attention_heads': 40,
+        'max_sequence_length': 2048,
+        'initializer_range': 0.02,
+        'rms_norm_eps': 1e-6,
+        'use_cache': True,
+        'tie_word_embeddings': False,
+    },
+    '20b': {
+        'vocab_size': 32000,
+        'hidden_size': 6144,
+        'intermediate_size': 24576,
+        'num_hidden_layers': 44,
+        'num_attention_heads': 64,
+        'max_sequence_length': 2048,
+        'initializer_range': 0.02,
+        'rms_norm_eps': 1e-6,
+        'use_cache': True,
+        'tie_word_embeddings': False,
+    },
+    '30b': {
+        'vocab_size': 32000,
+        'hidden_size': 6656,
+        'intermediate_size': 17920,
+        'num_hidden_layers': 60,
+        'num_attention_heads': 52,
+        'max_sequence_length': 2048,
+        'initializer_range': 0.02,
+        'rms_norm_eps': 1e-6,
+        'use_cache': True,
+        'tie_word_embeddings': False,
+    },
+    '65b': {
+        'vocab_size': 32000,
+        'hidden_size': 8192,
+        'intermediate_size': 22016,
+        'num_hidden_layers': 80,
+        'num_attention_heads': 64,
+        'max_sequence_length': 2048,
+        'initializer_range': 0.02,
+        'rms_norm_eps': 1e-5,
+        'use_cache': True,
+        'tie_word_embeddings': False,
+    },
+    'debug': { # A small model for debugging
+        'vocab_size': 32000,
+        'hidden_size': 128,
+        'intermediate_size': 256,
+        'num_hidden_layers': 2,
+        'num_attention_heads': 4,
+        'max_sequence_length': 2048,
+        'initializer_range': 0.02,
+        'rms_norm_eps': 1e-6,
+        'use_cache': True,
+        'tie_word_embeddings': False,
+    },
+}
 
-class LLaMAConfigurator(object):
-    """ Simplified LLaMA configuration. We start from a base model and
-        allow for easy updates to the configuration.
-    """
+
+class LLaMAConfig(PretrainedConfig):
+    r"""
+    This is the configuration class to store the configuration of a [`~LLaMAModel`]. It is used to instantiate an LLaMA
+    model according to the specified arguments, defining the model architecture. Instantiating a configuration with the
+    defaults will yield a similar configuration to that of the LLaMA-7B.
+    Configuration objects inherit from [`PretrainedConfig`] and can be used to control the model outputs. Read the
+    documentation from [`PretrainedConfig`] for more information.
+    Args:
+        vocab_size (`int`, *optional*, defaults to 32000):
+            Vocabulary size of the LLaMA model. Defines the number of different tokens that can be represented by the
+            `inputs_ids` passed when calling [`~LLaMAModel`] or [`~TFLLaMAModel`].
+        hidden_size (`int`, *optional*, defaults to 4096):
+            Dimension of the hidden representations.
+        intermediate_size (`int`, *optional*, defaults to 11008):
+            Dimension of the MLP representations.
+        num_hidden_layers (`int`, *optional*, defaults to 32):
+            Number of hidden layers in the Transformer encoder.
+        num_attention_heads (`int`, *optional*, defaults to 32):
+            Number of attention heads for each attention layer in the Transformer encoder.
+        hidden_act (`str` or `function`, *optional*, defaults to `"silu"`):
+            The non-linear activation function (function or string) in the decoder.
+        max_sequence_length (`int`, *optional*, defaults to 2048):
+            Max sequence length for model (for RoPE computation)
+        initializer_range (`float`, *optional*, defaults to 0.02):
+            The standard deviation of the truncated_normal_initializer for initializing all weight matrices.
+        rms_norm_eps (`float`, *optional*, defaults to 1e-12):
+            The epsilon used by the rms normalization layers.
+        use_cache (`bool`, *optional*, defaults to `True`):
+            Whether or not the model should return the last key/values attentions (not used by all models). Only
+            relevant if `config.is_decoder=True`.
+        tie_word_embeddings(`bool`, *optional*, defaults to `False`):
+            Whether to tie weight embeddings
+        Example:
+    ```python
+    >>> from transformers import LLaMAModel, LLaMAConfig
+    >>> # Initializing a LLaMA llama-7b style configuration
+    >>> configuration = LLaMAConfig()
+    >>> # Initializing a model from the llama-7b style configuration
+    >>> model = LLaMAModel(configuration)
+    >>> # Accessing the model configuration
+    >>> configuration = model.config
+    ```"""
+    model_type = "llama"
+
+    def __init__(
+        self,
+        vocab_size=32000,
+        hidden_size=4096,
+        intermediate_size=11008,
+        num_hidden_layers=32,
+        num_attention_heads=32,
+        num_key_value_heads=8,
+        max_sequence_length=2048,
+        rms_norm_eps=1e-6,
+        initializer_range=0.02,
+        use_cache=True,
+        # pad_token_id=-1,
+        bos_token_id=0,
+        eos_token_id=1,
+        resid_pdrop=0.0,
+        embd_pdrop=0.0,
+        attn_pdrop=0.0,
+        tie_word_embeddings=False,
+        remat_block='nothing_saveable',
+        remat_attention='',
+        remat_mlp='',
+        scan_attention = False,
+        scan_mlp = False,
+        scan_query_chunk_size = 1024,
+        scan_key_chunk_size = 1024,
+        scan_mlp_chunk_size = 1024,
+        fcm_min_ratio=0.0,
+        fcm_max_ratio=0.0,
+        **kwargs,
+    ):
+        self.vocab_size = vocab_size
+        self.hidden_size = hidden_size
+        self.initializer_range = initializer_range
+        self.intermediate_size = intermediate_size
+        self.num_hidden_layers = num_hidden_layers
+        self.num_attention_heads = num_attention_heads
+        self.num_key_value_heads = num_key_value_heads
+        self.max_sequence_length = max_sequence_length
+        self.rms_norm_eps = rms_norm_eps
+        self.use_cache = use_cache
+        self.resid_pdrop = resid_pdrop
+        self.embd_pdrop = embd_pdrop
+        self.attn_pdrop = attn_pdrop
+        self.remat_block = remat_block
+        self.remat_attention = remat_attention
+        self.remat_mlp = remat_mlp
+        self.fcm_min_ratio = fcm_min_ratio
+        self.fcm_max_ratio = fcm_max_ratio
+        super().__init__(
+            # pad_token_id=pad_token_id,
+            bos_token_id=bos_token_id,
+            eos_token_id=eos_token_id,
+            tie_word_embeddings=tie_word_embeddings,
+            **kwargs,
+        )
 
     @classmethod
     def get_default_config(cls, updates=None):
-        config = mlxu.config_dict()
-        config.base_model = 'llama_3b'
-        config.vocab_size = mlxu.config_placeholder(int)
-        config.hidden_size = mlxu.config_placeholder(int)
-        config.intermediate_size = mlxu.config_placeholder(int)
-        config.num_hidden_layers = mlxu.config_placeholder(int)
-        config.num_attention_heads = mlxu.config_placeholder(int)
-        config.num_key_value_heads = mlxu.config_placeholder(int)
-        config.initializer_range = mlxu.config_placeholder(float)
-        config.rms_norm_eps = mlxu.config_placeholder(float)
-        config.max_position_embeddings = mlxu.config_placeholder(int)
-        config.rope_theta = mlxu.config_placeholder(float)
-        config.embedding_dropout = mlxu.config_placeholder(float)
-        config.feedforward_dropout = mlxu.config_placeholder(float)
-        config.attention_dropout = mlxu.config_placeholder(float)
-        config.residue_dropout = mlxu.config_placeholder(float)
-        config.remat_block = mlxu.config_placeholder(str)
-        config.remat_attention = mlxu.config_placeholder(str)
-        config.remat_mlp = mlxu.config_placeholder(str)
-        config.scan_attention = mlxu.config_placeholder(bool)
-        config.scan_mlp = mlxu.config_placeholder(bool)
-        config.scan_query_chunk_size = mlxu.config_placeholder(int)
-        config.scan_key_chunk_size = mlxu.config_placeholder(int)
-        config.scan_mlp_chunk_size = mlxu.config_placeholder(int)
-        config.fcm_min_ratio = mlxu.config_placeholder(float)
-        config.fcm_max_ratio = mlxu.config_placeholder(float)
-        return mlxu.update_config_dict(config, updates)
+        config = function_args_to_config(cls.__init__)
 
-    @classmethod
-    def finalize_config(cls, config):
-        """ Apply updates on top of standard base model config. """
-        standard_config = cls.get_standard_llama_config(config.base_model)
-        for key, value in config.items():
-            if value is not None:
-                standard_config[key] = value
+        if updates is not None:
+            config.update(ConfigDict(updates).copy_and_resolve_references())
 
-        return PretrainedConfig.from_dict(standard_config)
-
-    @classmethod
-    def get_standard_llama_config(cls, model_name):
-        config = mlxu.config_dict()
-        config.base_model = 'llama_3b'
-        config.vocab_size = 32000
-        config.hidden_size = 3200
-        config.intermediate_size = 8640
-        config.num_hidden_layers = 26
-        config.num_attention_heads = 32
-        config.num_key_value_heads = 32
-        config.initializer_range = 1.0
-        config.rms_norm_eps = 1e-6
-        config.max_position_embeddings = 2048
-        config.rope_theta = 1e4
-        config.embedding_dropout = 0.0
-        config.feedforward_dropout = 0.0
-        config.attention_dropout = 0.0
-        config.residue_dropout = 0.0
-        config.remat_block = ''
-        config.remat_attention = ''
-        config.remat_mlp = ''
-        config.scan_attention = False
-        config.scan_mlp = False
-        config.scan_query_chunk_size = 1024
-        config.scan_key_chunk_size = 1024
-        config.scan_mlp_chunk_size = 1024
-        config.fcm_min_ratio = 0.0
-        config.fcm_max_ratio = 0.0
-
-        updates = {
-            'debug': dict(
-                base_model='debug',
-                hidden_size=128,
-                intermediate_size=256,
-                num_hidden_layers=2,
-                num_attention_heads=4,
-                num_key_value_heads=4,
-                rms_norm_eps=1e-6,
-            ),
-            'llama_1b': dict(
-                base_model='llama_1b',
-                hidden_size=2048,
-                intermediate_size=5504,
-                num_hidden_layers=22,
-                num_attention_heads=16,
-                num_key_value_heads=16,
-                rms_norm_eps=1e-6,
-            ),
-            'llama_3b': dict(
-                base_model='llama_3b',
-                hidden_size=3200,
-                intermediate_size=8640,
-                num_hidden_layers=26,
-                num_attention_heads=32,
-                num_key_value_heads=32,
-                rms_norm_eps=1e-6,
-            ),
-            'llama_7b': dict(
-                base_model='llama_7b',
-                hidden_size=4096,
-                intermediate_size=11008,
-                num_hidden_layers=32,
-                num_attention_heads=32,
-                num_key_value_heads=32,
-                rms_norm_eps=1e-6,
-            ),
-            'llama_13b': dict(
-                base_model='llama_13b',
-                hidden_size=5120,
-                intermediate_size=13824,
-                num_hidden_layers=40,
-                num_attention_heads=40,
-                num_key_value_heads=40,
-                rms_norm_eps=1e-6,
-            ),
-            'llama_30b': dict(
-                base_model='llama_30b',
-                hidden_size=6656,
-                intermediate_size=17920,
-                num_hidden_layers=60,
-                num_attention_heads=52,
-                num_key_value_heads=52,
-                rms_norm_eps=1e-6,
-            ),
-            'llama_65b': dict(
-                base_model='llama_65b',
-                hidden_size=8192,
-                intermediate_size=22016,
-                num_hidden_layers=80,
-                num_attention_heads=64,
-                num_key_value_heads=64,
-                rms_norm_eps=1e-5,
-            ),
-            'llama2_7b': dict(
-                base_model='llama2_7b',
-                hidden_size=4096,
-                intermediate_size=11008,
-                num_hidden_layers=32,
-                num_attention_heads=32,
-                num_key_value_heads=32,
-                max_position_embeddings=4096,
-                rms_norm_eps=1e-5,
-            ),
-            'llama2_13b': dict(
-                base_model='llama2_13b',
-                hidden_size=5120,
-                intermediate_size=13824,
-                num_hidden_layers=40,
-                num_attention_heads=40,
-                num_key_value_heads=40,
-                max_position_embeddings=4096,
-                rms_norm_eps=1e-5,
-            ),
-            'llama2_70b': dict(
-                base_model='llama_65b',
-                hidden_size=8192,
-                intermediate_size=28672,
-                num_hidden_layers=80,
-                num_attention_heads=64,
-                num_key_value_heads=8,
-                max_position_embeddings=4096,
-                rms_norm_eps=1e-5,
-            ),
-            'llama3_8b': dict(
-                base_model='llama3_8b',
-                vocab_size=128256,
-                hidden_size=4096,
-                intermediate_size=14336,
-                num_hidden_layers=32,
-                num_attention_heads=32,
-                num_key_value_heads=8,
-                max_position_embeddings=8192,
-                rms_norm_eps=1e-5,
-                rope_theta=5e5,
-            ),
-            'llama3_70b': dict(
-                base_model='llama3_8b',
-                vocab_size=128256,
-                hidden_size=8192,
-                intermediate_size=28672,
-                num_hidden_layers=80,
-                num_attention_heads=64,
-                num_key_value_heads=8,
-                max_position_embeddings=8192,
-                rms_norm_eps=1e-5,
-                rope_theta=5e5,
-            ),
-            'llama3_1b': dict(
-                base_model='llama3_1b',
-                vocab_size=32000,
-                hidden_size=2048,
-                intermediate_size=5632,
-                num_hidden_layers=24,
-                num_attention_heads=16,
-                num_key_value_heads=8,
-                max_position_embeddings=8196,
-                rms_norm_eps=1e-5,
-                rope_theta=5e5,
-            ),
-        }[model_name]
-        return mlxu.update_config_dict(config, updates)
+        return config
 
     @staticmethod
     def get_jax_mesh(axis_dims):
@@ -267,11 +300,55 @@ class LLaMAConfigurator(object):
         )
 
     @staticmethod
+    def get_weight_decay_exclusions():
+        return tuple()
+
+    @staticmethod
     def rng_keys():
         return ('params', 'dropout', 'fcm')
 
+    @staticmethod
+    def get_tokenizer_config(updates=None):
+        config = ConfigDict()
+        config.vocab_file = ''
+        config.add_bos_token = False
+        config.add_eos_token = False
+
+        if updates is not None:
+            config.update(ConfigDict(updates).copy_and_resolve_references())
+        return config
+
+    @classmethod
+    def get_tokenizer(cls, config, padding_side='left', truncation_side='right'):
+        config = cls.get_tokenizer_config(config)
+        assert config.vocab_file != '', 'vocab_file must be specified'
+        tokenizer = LLaMATokenizer(
+            vocab_file=config.vocab_file,
+            add_bos_token=config.add_bos_token,
+            add_eos_token=config.add_eos_token,
+            padding_side=padding_side,
+            truncation_side=truncation_side,
+        )
+        return tokenizer
+
+    @classmethod
+    def load_config(cls, path):
+        if path in LLAMA_STANDARD_CONFIGS:
+            return cls.from_dict(LLAMA_STANDARD_CONFIGS[path])
+        load_type, load_path = path.split('::', 1)
+        if load_type == 'pickle':
+            return cls.from_dict(load_pickle(load_path)['llama_config'])
+        elif load_type == 'json':
+            with open_file(load_path, 'r') as fin:
+                raw_config = fin.read()
+            return cls.from_dict(json.loads(raw_config))
+        else:
+            raise ValueError(f'Unsupported load config type: {load_type}')
+
 
 remat = nn_partitioning.remat
+
+logger = logging.get_logger(__name__)
 
 
 class RMSNorm(nn.Module):
@@ -331,7 +408,7 @@ def apply_rotary_emb(
 
 
 class FlaxLLaMAAttention(nn.Module):
-    config: PretrainedConfig
+    config: LLaMAConfig
     dtype: jnp.dtype=jnp.float32
     param_dtype: jnp.dtype=jnp.float32
     precision: Optional[Union[jax.lax.Precision, str]]=None
@@ -373,14 +450,13 @@ class FlaxLLaMAAttention(nn.Module):
             precision=self.precision,
         )
 
-        self.resid_dropout = nn.Dropout(rate=config.residue_dropout)
+        self.resid_dropout = nn.Dropout(rate=config.resid_pdrop)
 
-        self.causal_mask = make_causal_mask(jnp.ones((1, config.max_position_embeddings), dtype="bool"), dtype="bool")
+        self.causal_mask = make_causal_mask(jnp.ones((1, config.max_sequence_length), dtype="bool"), dtype="bool")
 
         self.freqs_cis = precompute_freqs_cis(
-            head_dim,
-            config.max_position_embeddings * 2,
-            theta=10000.0,
+            self.head_dim,
+            config.max_sequence_length * 2,
             dtype=self.dtype,
         )
 
@@ -537,7 +613,7 @@ class FlaxLLaMAAttention(nn.Module):
 
 
 class FlaxLLaMAMLP(nn.Module):
-    config: PretrainedConfig
+    config: LLaMAConfig
     dtype: jnp.dtype=jnp.float32
     param_dtype: jnp.dtype=jnp.float32
     precision: Optional[Union[jax.lax.Precision, str]]=None
@@ -569,7 +645,7 @@ class FlaxLLaMAMLP(nn.Module):
             kernel_init=jax.nn.initializers.normal(self.config.initializer_range),
             precision=self.precision,
         )
-        self.dropout = nn.Dropout(rate=self.config.residue_dropout)
+        self.dropout = nn.Dropout(rate=self.config.resid_pdrop)
 
     def __call__(self, x: jnp.ndarray, deterministic: bool = True) -> jnp.ndarray:
         x = self.w2(nn.silu(self.w1(x)) * self.w3(x))
@@ -578,7 +654,7 @@ class FlaxLLaMAMLP(nn.Module):
 
 
 class FlaxLLaMABlock(nn.Module):
-    config: PretrainedConfig
+    config: LLaMAConfig
     dtype: jnp.dtype=jnp.float32
     param_dtype: jnp.dtype=jnp.float32
     precision: Optional[Union[jax.lax.Precision, str]]=None
@@ -672,12 +748,14 @@ class FlaxLLaMAPreTrainedModel(FlaxPreTrainedModel):
     An abstract class to handle weights initialization and a simple interface for downloading and loading pretrained
     models.
     """
+
+    config_class = LLaMAConfig
     base_model_prefix = "transformer"
     module_class: nn.Module = None
 
     def __init__(
         self,
-        config: PretrainedConfig,
+        config: LLaMAConfig,
         input_shape: Tuple = (1, 1),
         seed: int = 0,
         dtype: jnp.dtype = jnp.float32,
@@ -728,6 +806,7 @@ class FlaxLLaMAPreTrainedModel(FlaxPreTrainedModel):
         )
         return init_variables["cache"]
 
+    @add_start_docstrings_to_model_forward("")
     def __call__(
         self,
         input_ids,
@@ -802,7 +881,7 @@ class FlaxLLaMAPreTrainedModel(FlaxPreTrainedModel):
 
 
 class FlaxLLaMABlockCollection(nn.Module):
-    config: PretrainedConfig
+    config: LLaMAConfig
     dtype: jnp.dtype = jnp.float32
     param_dtype: jnp.dtype=jnp.float32
     precision: Optional[Union[jax.lax.Precision, str]]=None
@@ -833,6 +912,7 @@ class FlaxLLaMABlockCollection(nn.Module):
         init_cache: bool = False,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
+        return_dict: bool = True,
     ):
         all_attentions = () if output_attentions else None
         all_hidden_states = () if output_hidden_states else None
@@ -880,7 +960,7 @@ class FlaxLLaMABlockCollection(nn.Module):
 
 
 class FlaxLLaMAModule(nn.Module):
-    config: PretrainedConfig
+    config: LLaMAConfig
     dtype: jnp.dtype = jnp.float32
     param_dtype: jnp.dtype=jnp.float32
     precision: Optional[Union[jax.lax.Precision, str]]=None
@@ -895,7 +975,7 @@ class FlaxLLaMAModule(nn.Module):
             dtype=self.dtype,
             param_dtype=self.param_dtype,
         )
-        self.dropout = nn.Dropout(rate=self.config.embedding_dropout)
+        self.dropout = nn.Dropout(rate=self.config.embd_pdrop)
         self.h = FlaxLLaMABlockCollection(
             self.config,
             dtype=self.dtype,
@@ -952,12 +1032,12 @@ class FlaxLLaMAModule(nn.Module):
             attentions=outputs[-1],
         )
 
-
+@add_start_docstrings("", "")
 class FlaxLLaMAModel(FlaxLLaMAPreTrainedModel):
     module_class = FlaxLLaMAModule
 
 class FlaxLLaMAForCausalLMModule(nn.Module):
-    config: PretrainedConfig
+    config: LLaMAConfig
     dtype: jnp.dtype = jnp.float32
     param_dtype: jnp.dtype=jnp.float32
     precision: Optional[Union[jax.lax.Precision, str]]=None
@@ -1012,10 +1092,11 @@ class FlaxLLaMAForCausalLMModule(nn.Module):
         return FlaxCausalLMOutput(logits=lm_logits, hidden_states=outputs.hidden_states, attentions=outputs.attentions)
 
 
+@add_start_docstrings("", "")
 class FlaxLLaMAForCausalLM(FlaxLLaMAPreTrainedModel):
     module_class = FlaxLLaMAForCausalLMModule
 
-    def prepare_inputs_for_generation(self, input_ids, max_length, attention_mask: Optional[jax.Array] = None):
+    def prepare_inputs_for_generation(self, input_ids, max_length, attention_mask: Optional[jnp.DeviceArray] = None):
         # initializing the cache
         batch_size, seq_length = input_ids.shape
 
@@ -1040,3 +1121,199 @@ class FlaxLLaMAForCausalLM(FlaxLLaMAPreTrainedModel):
         model_kwargs["past_key_values"] = model_outputs.past_key_values
         model_kwargs["position_ids"] = model_kwargs["position_ids"][:, -1:] + 1
         return model_kwargs
+
+# append_call_sample_docstring(
+#     FlaxGPTJForCausalLM,
+#     _TOKENIZER_FOR_DOC,
+#     _CHECKPOINT_FOR_DOC,
+#     FlaxCausalLMOutput,
+#     _CONFIG_FOR_DOC,
+# )
+
+
+
+VOCAB_FILES_NAMES = {"vocab_file": "tokenizer.model"}
+
+PRETRAINED_VOCAB_FILES_MAP = {}
+
+
+class LLaMATokenizer(PreTrainedTokenizer):
+    """
+    Construct a LLaMA tokenizer. Based on byte-level Byte-Pair-Encoding.
+    Args:
+        vocab_file (`str`):
+            Path to the vocabulary file.
+    """
+
+    vocab_files_names = VOCAB_FILES_NAMES
+    pretrained_vocab_files_map = PRETRAINED_VOCAB_FILES_MAP
+    model_input_names = ["input_ids", "attention_mask"]
+
+    def __init__(
+        self,
+        vocab_file,
+        unk_token="<unk>",
+        bos_token="<s>",
+        eos_token="</s>",
+        sp_model_kwargs: Optional[Dict[str, Any]] = None,
+        add_bos_token=False,
+        add_eos_token=False,
+        **kwargs,
+    ):
+        self.sp_model_kwargs = {} if sp_model_kwargs is None else sp_model_kwargs
+        super().__init__(bos_token=bos_token, eos_token=eos_token, unk_token=unk_token, **kwargs)
+        self.vocab_file = vocab_file
+        self.add_bos_token = add_bos_token
+        self.add_eos_token = add_eos_token
+        self.sp_model = spm.SentencePieceProcessor(**self.sp_model_kwargs)
+
+        with tempfile.NamedTemporaryFile() as tfile:
+            with open_file(self.vocab_file, 'rb') as fin:
+                tfile.write(fin.read())
+                tfile.flush()
+                tfile.seek(0)
+            self.sp_model.Load(tfile.name)
+        """ Initialisation"""
+        self.add_special_tokens(dict(
+            unk_token=unk_token,
+            bos_token=bos_token,
+            eos_token=eos_token,
+        ))
+        self.pad_token_id = self.unk_token_id
+
+    @property
+    def vocab_size(self):
+        """Returns vocab size"""
+        return self.sp_model.get_piece_size()
+
+    @property
+    def bos_token_id(self) -> Optional[int]:
+        return self.sp_model.bos_id()
+
+    @property
+    def eos_token_id(self) -> Optional[int]:
+        return self.sp_model.eos_id()
+
+    def get_vocab(self):
+        """Returns vocab as a dict"""
+        vocab = {self.convert_ids_to_tokens(i): i for i in range(self.vocab_size)}
+        vocab.update(self.added_tokens_encoder)
+        return vocab
+
+    def _tokenize(self, text):
+        """Returns a tokenized string."""
+        return self.sp_model.encode(text, out_type=str)
+
+    def _convert_token_to_id(self, token):
+        """Converts a token (str) in an id using the vocab."""
+        return self.sp_model.piece_to_id(token)
+
+    def _convert_id_to_token(self, index):
+        """Converts an index (integer) in a token (str) using the vocab."""
+        token = self.sp_model.IdToPiece(index)
+        return token
+
+    def convert_tokens_to_string(self, tokens):
+        """Converts a sequence of tokens (string) in a single string."""
+        current_sub_tokens = []
+        out_string = ""
+        prev_is_special = False
+        for token in tokens:
+            # make sure that special tokens are not decoded using sentencepiece model
+            if token in self.all_special_tokens:
+                if not prev_is_special:
+                    out_string += " "
+                out_string += self.sp_model.decode(current_sub_tokens) + token
+                prev_is_special = True
+                current_sub_tokens = []
+            else:
+                current_sub_tokens.append(token)
+                prev_is_special = False
+        out_string += self.sp_model.decode(current_sub_tokens)
+        return out_string.strip()
+
+    def save_vocabulary(self, save_directory, filename_prefix: Optional[str] = None) -> Tuple[str]:
+        """
+        Save the vocabulary and special tokens file to a directory.
+        Args:
+            save_directory (`str`):
+                The directory in which to save the vocabulary.
+        Returns:
+            `Tuple(str)`: Paths to the files saved.
+        """
+        if not os.path.isdir(save_directory):
+            logger.error(f"Vocabulary path ({save_directory}) should be a directory")
+            return
+        out_vocab_file = os.path.join(
+            save_directory, (filename_prefix + "-" if filename_prefix else "") + VOCAB_FILES_NAMES["vocab_file"]
+        )
+
+        if os.path.abspath(self.vocab_file) != os.path.abspath(out_vocab_file) and os.path.isfile(self.vocab_file):
+            copyfile(self.vocab_file, out_vocab_file)
+        elif not os.path.isfile(self.vocab_file):
+            with open(out_vocab_file, "wb") as fi:
+                content_spiece_model = self.sp_model.serialized_model_proto()
+                fi.write(content_spiece_model)
+
+        return (out_vocab_file,)
+
+    def build_inputs_with_special_tokens(self, token_ids_0, token_ids_1=None):
+        if self.add_bos_token:
+            bos_token_ids = [self.bos_token_id]
+        else:
+            bos_token_ids = []
+
+        output = bos_token_ids + token_ids_0
+
+        if token_ids_1 is not None:
+            output = output + token_ids_1
+
+        if self.add_eos_token:
+            output = output + [self.eos_token_id]
+
+        return output
+
+    def get_special_tokens_mask(
+        self, token_ids_0: List[int], token_ids_1: Optional[List[int]] = None, already_has_special_tokens: bool = False
+    ) -> List[int]:
+        """
+        Retrieve sequence ids from a token list that has no special tokens added. This method is called when adding
+        special tokens using the tokenizer `prepare_for_model` method.
+        Args:
+            token_ids_0 (`List[int]`):
+                List of IDs.
+            token_ids_1 (`List[int]`, *optional*):
+                Optional second list of IDs for sequence pairs.
+            already_has_special_tokens (`bool`, *optional*, defaults to `False`):
+                Whether or not the token list is already formatted with special tokens for the model.
+        Returns:
+            `List[int]`: A list of integers in the range [0, 1]: 1 for a special token, 0 for a sequence token.
+        """
+        if already_has_special_tokens:
+            return super().get_special_tokens_mask(
+                token_ids_0=token_ids_0, token_ids_1=token_ids_1, already_has_special_tokens=True
+            )
+
+        if token_ids_1 is None:
+            return [1] + ([0] * len(token_ids_0)) + [1]
+        return [1] + ([0] * len(token_ids_0)) + [1, 1] + ([0] * len(token_ids_1)) + [1]
+
+    def create_token_type_ids_from_sequences(
+        self, token_ids_0: List[int], token_ids_1: Optional[List[int]] = None
+    ) -> List[int]:
+        """
+        Create a mask from the two sequences passed to be used in a sequence-pair classification task. T5 does not make
+        use of token type ids, therefore a list of zeros is returned.
+        Args:
+            token_ids_0 (`List[int]`):
+                List of IDs.
+            token_ids_1 (`List[int]`, *optional*):
+                Optional second list of IDs for sequence pairs.
+        Returns:
+            `List[int]`: List of zeros.
+        """
+        eos = [self.eos_token_id]
+
+        if token_ids_1 is None:
+            return len(token_ids_0 + eos) * [0]
+        return len(token_ids_0 + eos + token_ids_1 + eos) * [0]
