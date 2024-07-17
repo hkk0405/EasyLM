@@ -535,7 +535,7 @@ class FlaxLLaMAAttention(nn.Module):
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis, dtype=self.dtype)
 
         dropout_rng = None
-        if not deterministic and self.config.attention_dropout > 0.0:
+        if not deterministic and self.config.attn_pdrop > 0.0:
             dropout_rng = self.make_rng("dropout")
 
         if self.config.scan_attention and not (self.has_variable("cache", "cached_key") or init_cache):
@@ -557,7 +557,7 @@ class FlaxLLaMAAttention(nn.Module):
                 bias=attention_bias,
                 deterministic=deterministic,
                 dropout_rng=dropout_rng,
-                attn_pdrop=self.config.attention_dropout,
+                attn_pdrop=self.config.attn_pdrop,
                 causal=True,
                 query_chunk_size=self.config.scan_query_chunk_size,
                 key_chunk_size=self.config.scan_key_chunk_size,
@@ -602,7 +602,7 @@ class FlaxLLaMAAttention(nn.Module):
                 xk,
                 bias=attention_bias,
                 dropout_rng=dropout_rng,
-                dropout_rate=self.config.attention_dropout,
+                dropout_rate=self.config.attn_pdrop,
                 deterministic=deterministic,
                 dtype=jnp.promote_types(self.dtype, jnp.float32),
                 precision=self.precision,
