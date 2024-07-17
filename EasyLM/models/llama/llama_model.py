@@ -333,6 +333,7 @@ class LLaMAConfig(PretrainedConfig):
 
     @classmethod
     def load_config(cls, path):
+        print(path)
         if path in LLAMA_STANDARD_CONFIGS:
             return cls.from_dict(LLAMA_STANDARD_CONFIGS[path])
         load_type, load_path = path.split('::', 1)

@@ -222,6 +222,7 @@ def main(argv):
         eval_iterator = iter(eval_dataset)
 
     if FLAGS.load_llama_config != '':
+        print(FLAGS.load_llama_config)
         llama_config = LLaMAConfig.load_config(FLAGS.load_llama_config)
     else:
         llama_config = LLaMAConfig(**FLAGS.llama)
