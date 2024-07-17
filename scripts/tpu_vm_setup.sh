@@ -26,7 +26,7 @@ datasets==2.19.1
 tqdm
 requests
 typing-extensions
-mlxu>=0.1.13
+mlxu==0.1.11
 sentencepiece
 pydantic
 fastapi
