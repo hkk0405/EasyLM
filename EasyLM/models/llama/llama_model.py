@@ -29,7 +29,6 @@ from transformers.utils import add_start_docstrings, add_start_docstrings_to_mod
 from ml_collections import ConfigDict
 from ml_collections.config_dict import config_dict
 from mlxu import function_args_to_config, load_pickle, open_file
-from EasyLM.bpt import blockwise_ffn, blockwise_attn
 
 from EasyLM.jax_utils import (
     with_sharding_constraint, get_jax_mesh, get_gradient_checkpoint_policy
@@ -1017,6 +1016,7 @@ class FlaxLLaMAModule(nn.Module):
             init_cache=init_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
         )
 
         hidden_states = outputs[0]
@@ -1089,7 +1089,12 @@ class FlaxLLaMAForCausalLMModule(nn.Module):
         )
 
         hidden_states = outputs[0]
-        lm_logits = self.lm_head(hidden_states)
+
+        if self.config.tie_word_embeddings:
+            shared_kernel = self.transformer.variables["params"]["wte"]["embedding"].T
+            lm_logits = self.lm_head.apply({"params": {"kernel": shared_kernel}}, hidden_states)
+        else:
+            lm_logits = self.lm_head(hidden_states)
 
         if not return_dict:
             return (lm_logits,) + outputs[1:]

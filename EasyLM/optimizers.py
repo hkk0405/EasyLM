@@ -190,7 +190,7 @@ class AdamWOptimizerFactory(object):
 
 
 class OptaxScheduledWeightDecayState(NamedTuple):
-    count: jax.Array
+    count: jnp.DeviceArray
 
 
 def optax_add_scheduled_weight_decay(schedule_fn, mask=None):

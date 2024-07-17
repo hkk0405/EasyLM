@@ -13,7 +13,6 @@ import jax.numpy as jnp
 from jax.experimental.pjit import pjit
 from jax.sharding import PartitionSpec as PS
 from flax.training.train_state import TrainState
-from transformers import AutoTokenizer
 
 from EasyLM.data import DatasetFactory
 from EasyLM.checkpoint import StreamingCheckpointer
@@ -21,8 +20,8 @@ from EasyLM.optimizers import OptimizerFactory
 from EasyLM.jax_utils import (
     JaxRNG, JaxDistributedConfig, next_rng, match_partition_rules,
     cross_entropy_loss_and_accuracy, global_norm, get_float_dtype_by_name,
-    set_random_seed, average_metrics, make_shard_and_gather_fns,
-    with_sharding_constraint, get_weight_decay_mask
+    set_random_seed, average_metrics, get_weight_decay_mask,
+    make_shard_and_gather_fns, with_sharding_constraint,
 )
 from EasyLM.models.llama.llama_model import (
     LLaMAConfig, FlaxLLaMAForCausalLMModule
@@ -222,7 +221,6 @@ def main(argv):
         eval_iterator = iter(eval_dataset)
 
     if FLAGS.load_llama_config != '':
-        print(FLAGS.load_llama_config)
         llama_config = LLaMAConfig.load_config(FLAGS.load_llama_config)
     else:
         llama_config = LLaMAConfig(**FLAGS.llama)
