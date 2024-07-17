@@ -44,8 +44,7 @@ FLAGS, FLAGS_DEF = mlxu.define_flags_with_default(
     bucket_project_name='',
     seed=42,
     mesh_dim='1,-1,1',
-    dtype='fp32',
-    param_dtype='fp32',
+    dtype='fp16',
     total_steps=10000,
     load_llama_config='',
     update_llama_config='',
@@ -239,12 +238,13 @@ def main(argv):
         llama_config.update(dict(vocab_size=tokenizer.vocab_size))
 
     model = FlaxLLaMAForCausalLMModule(
-        llama_config,
-        dtype=get_float_dtype_by_name(FLAGS.dtype),
-        param_dtype=get_float_dtype_by_name(FLAGS.param_dtype),
+        llama_config, dtype=get_float_dtype_by_name(FLAGS.dtype)
     )
 
-    optimizer, optimizer_info = OptimizerFactory.get_optimizer(FLAGS.optimizer)
+    optimizer, optimizer_info = OptimizerFactory.get_optimizer(
+        FLAGS.optimizer,
+        get_weight_decay_mask(LLaMAConfig.get_weight_decay_exclusions())
+    )
 
     def create_trainstate_from_params(params):
         return TrainState.create(params=params, tx=optimizer, apply_fn=None)
