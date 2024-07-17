@@ -15,17 +15,26 @@ sudo apt-get update && sudo apt-get install -y \
 # Python dependencies
 cat > $HOME/tpu_requirements.txt <<- EndOfFile
 -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
-jax[tpu]==0.4.11
+jax[tpu]==0.4.7
+tensorflow==2.11.0
 flax==0.6.8
 optax==0.1.4
+chex==0.1.7
+distrax==0.1.3
 einops
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==1.12.1
-transformers==4.41.0
+transformers==4.27.2
 datasets==2.19.1
+huggingface_hub==0.13.3
 tqdm
+h5py
+ml_collections
+wandb
+gcsfs==2022.11.0
 requests
 typing-extensions
+lm-eval==0.3.0
 mlxu==0.1.11
 sentencepiece
 pydantic
