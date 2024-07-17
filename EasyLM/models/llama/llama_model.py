@@ -333,7 +333,6 @@ class LLaMAConfig(PretrainedConfig):
 
     @classmethod
     def load_config(cls, path):
-        print(path)
         if path in LLAMA_STANDARD_CONFIGS:
             return cls.from_dict(LLAMA_STANDARD_CONFIGS[path])
         load_type, load_path = path.split('::', 1)
@@ -456,7 +455,7 @@ class FlaxLLaMAAttention(nn.Module):
         self.causal_mask = make_causal_mask(jnp.ones((1, config.max_sequence_length), dtype="bool"), dtype="bool")
 
         self.freqs_cis = precompute_freqs_cis(
-            self.head_dim,
+            head_dim,
             config.max_sequence_length * 2,
             dtype=self.dtype,
         )
