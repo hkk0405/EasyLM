@@ -250,6 +250,11 @@ class LLaMAConfig(PretrainedConfig):
         self.remat_block = remat_block
         self.remat_attention = remat_attention
         self.remat_mlp = remat_mlp
+        self.scan_attention = scan_attention
+        self.scan_mlp = scan_mlp
+        self.scan_query_chunk_size = scan_query_chunk_size
+        self.scan_key_chunk_size = scan_key_chunk_size
+        self.scan_mlp_chunk_size = scan_mlp_chunk_size
         self.fcm_min_ratio = fcm_min_ratio
         self.fcm_max_ratio = fcm_max_ratio
         super().__init__(
