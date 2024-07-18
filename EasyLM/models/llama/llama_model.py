@@ -1,3 +1,4 @@
+import einops
 import os
 from shutil import copyfile
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -35,6 +36,19 @@ from EasyLM.jax_utils import (
 
 
 LLAMA_STANDARD_CONFIGS = {
+    'llama3_1b':{
+        'vocab_size': 32000,
+        'hidden_size': 2048,
+        'intermediate_size': 5632,
+        'num_hidden_layers': 24,
+        'num_attention_heads': 16,
+        'num_key_value_heads' : 8,
+        'max_sequence_length': 8196,
+        'initializer_range': 0.02,
+        'rms_norm_eps': 1e-5,
+        'use_cache': True,
+        'tie_word_embeddings': False,
+    },
     'tiny': {
         'vocab_size': 32000,
         'hidden_size': 64,
@@ -198,6 +212,7 @@ class LLaMAConfig(PretrainedConfig):
         num_hidden_layers=32,
         num_attention_heads=32,
         max_sequence_length=2048,
+        num_key_value_heads=32,
         rms_norm_eps=1e-6,
         initializer_range=0.02,
         use_cache=True,
@@ -222,6 +237,7 @@ class LLaMAConfig(PretrainedConfig):
         self.num_hidden_layers = num_hidden_layers
         self.num_attention_heads = num_attention_heads
         self.max_sequence_length = max_sequence_length
+        self.num_key_value_heads = num_key_value_heads
         self.rms_norm_eps = rms_norm_eps
         self.use_cache = use_cache
         self.resid_pdrop = resid_pdrop
@@ -397,10 +413,11 @@ class FlaxLLaMAAttention(nn.Module):
         config = self.config
         self.embed_dim = config.hidden_size
         self.num_heads = config.num_attention_heads
-        self.head_dim = self.embed_dim // self.num_heads
+        # self.head_dim = self.embed_dim // self.num_heads
+        self.head_dim = config.hidden_size // config.num_attention_heads
 
         self.wq = nn.Dense(
-            config.num_attention_heads*self.head_dim,
+            config.num_attention_heads * self.head_dim,
             dtype=self.dtype,
             param_dtype=self.param_dtype,
             use_bias=False,
@@ -408,7 +425,7 @@ class FlaxLLaMAAttention(nn.Module):
             precision=self.precision,
         )
         self.wk = nn.Dense(
-            config.num_attention_heads*self.head_dim,
+            config.num_attention_heads * self.head_dim,
             dtype=self.dtype,
             param_dtype=self.param_dtype,
             use_bias=False,
@@ -416,7 +433,7 @@ class FlaxLLaMAAttention(nn.Module):
             precision=self.precision,
         )
         self.wv = nn.Dense(
-            config.num_attention_heads*self.head_dim,
+            config.num_attention_heads * self.head_dim,
             dtype=self.dtype,
             param_dtype=self.param_dtype,
             use_bias=False,
@@ -439,6 +456,7 @@ class FlaxLLaMAAttention(nn.Module):
         self.freqs_cis = precompute_freqs_cis(
             self.head_dim,
             config.max_sequence_length * 2,
+            theta=10000.0,
             dtype=self.dtype,
         )
 
@@ -496,13 +514,31 @@ class FlaxLLaMAAttention(nn.Module):
         xk = with_sharding_constraint(xk, PS(("dp", "fsdp"), None, "mp"))
         xv = with_sharding_constraint(xv, PS(("dp", "fsdp"), None, "mp"))
 
-        xq = self._split_heads(xq)
-        xk = self._split_heads(xk)
-        xv = self._split_heads(xv)
+        # xq = self._split_heads(xq)
+        xq = einops.rearrange(
+            xq, 'b s (h d) -> b s h d',
+            h=self.config.num_attention_heads,
+        )
+        # xk = self._split_heads(xk)
+        xk = einops.repeat(
+            xk, 'b s (h d) -> b s (h g) d',
+            h=self.config.num_key_value_heads,
+            g=self.config.num_attention_heads // self.config.num_key_value_heads,
+        )        
+        # xv = self._split_heads(xv)
+        xv = einops.repeat(
+            xv, 'b s (h d) -> b s (h g) d',
+            h=self.config.num_key_value_heads,
+            g=self.config.num_attention_heads // self.config.num_key_value_heads,
+        )
 
         freqs_cis = jnp.take(self.freqs_cis, position_ids, axis=0)
 
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis, dtype=self.dtype)
+
+        dropout_rng = None
+        if not deterministic and self.config.attn_pdrop > 0.0:
+            dropout_rng = self.make_rng("dropout")
 
         query_length, key_length = xq.shape[1], xk.shape[1]
 
@@ -522,9 +558,6 @@ class FlaxLLaMAAttention(nn.Module):
         # attention_mask = jnp.expand_dims(attention_mask, axis=(1))
         attention_mask = combine_masks(attention_mask, causal_mask, fcm_mask)
 
-        dropout_rng = None
-        if not deterministic and self.config.attn_pdrop > 0.0:
-            dropout_rng = self.make_rng("dropout")
 
         # During fast autoregressive decoding, we feed one position at a time,
         # and cache the keys and values step by step.
@@ -918,8 +951,18 @@ class FlaxLLaMAModule(nn.Module):
             param_dtype=self.param_dtype,
         )
         self.dropout = nn.Dropout(rate=self.config.embd_pdrop)
-        self.h = FlaxLLaMABlockCollection(self.config, dtype=self.dtype, param_dtype=self.param_dtype, precision=self.precision)
-        self.ln_f = RMSNorm(self.config.hidden_size, eps=self.config.rms_norm_eps, dtype=self.dtype, param_dtype=self.param_dtype)
+        self.h = FlaxLLaMABlockCollection(
+            self.config,
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+            precision=self.precision,
+        )
+        self.ln_f = RMSNorm(
+            self.config.hidden_size,
+            eps=self.config.rms_norm_eps,
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+        )
 
     def __call__(
         self,
